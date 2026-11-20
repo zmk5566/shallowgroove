@@ -1,0 +1,10 @@
+import("stdfaust.lib");
+declare name "Pulse arpeggio";
+freq = hslider("freq",440,20,20000,1);
+gain = hslider("gain",0.5,0,1,0.001);
+gate = button("gate");
+attack = hslider("Attack[unit:s]",0.003,0.001,0.5,0.001);
+release = hslider("Release[unit:s]",0.025,0.005,0.5,0.001);
+tone = os.pulsetrain(freq,0.25)-0.25;
+voice = tone*0.28*gain*en.adsr(attack,0.035,0.64,release,gate);
+process = voice <: _,_;

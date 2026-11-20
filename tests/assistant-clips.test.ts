@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {clipCommand,workspaceInventory} from '../src/assistant/clip-workspace.ts';
+import {emptyProject} from '../src/model/project-files.ts';
+import {validateClips} from '../src/model/clips.ts';
+import {validateScenes} from '../src/model/scenes.ts';
+
+test('compose in local time, reuse the clip in Session and Arrangement, then vary one reference',()=>{
+ const p=emptyProject(),track=p.tracks[0].id;
+ const created=clipCommand(p,0,{action:'create_clip',name:'Pulse',lengthBars:2});
+ const clipId=created.result.clipId!,library=created.next!;
+ assert.equal(library.tracks[0].clipRefs?.length??0,0);
+ const read=clipCommand(library,0,{action:'inspect_notes',clipId,bar:1}).result;
+ assert.ok('revision' in read);
+ const written=clipCommand(library,0,{action:'edit_notes',clipId,bar:1,revision:read.revision,add:[{tick:0,end:120,pitch:48,velocity:96}]}).next!;
+ assert.equal(created.result.sceneId,'scene-1');
+ assert.equal(clipCommand(written,0,{action:'assign_clip',clipId,sceneId:'scene-1'}).next,undefined);
+ const session=written;
+ const placed=clipCommand(session,0,{action:'place_clip',clipId,bars:[3,7]}).next!;
+ assert.throws(()=>clipCommand(placed,0,{action:'place_clip',clipId,bars:[11,7]}));
+ const view=workspaceInventory(placed);
+ assert.deepEqual(view.scenes[0].slots,[{trackId:track,clipId}]);
+ assert.deepEqual(view.arrangement[0].references.map(r=>r.startPosition.bar),[3,7]);
+ const fork=clipCommand(placed,0,{action:'fork_clip',refId:view.arrangement[0].references[1].refId,name:'Fill'}).next!;
+ const current=clipCommand(fork,0,{action:'inspect_notes',clipId}).result;
+ assert.ok('revision' in current);
+ const final=clipCommand(fork,0,{action:'transpose_notes',clipId,semitones:12,revision:current.revision}).next!;
+ assert.deepEqual(final.tracks[0].events.filter(e=>e.status===144).map(e=>e.data[0]),[60,48]);
+ assert.equal(workspaceInventory(final).clips[1].parentClipId,clipId);
+ validateScenes(final);validateClips(final);
+});

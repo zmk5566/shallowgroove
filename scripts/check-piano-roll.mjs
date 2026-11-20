@@ -1,0 +1,64 @@
+import {createServer} from 'vite';
+import {chromium,expect} from '@playwright/test';
+import {readFile,mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import assert from 'node:assert/strict';
+import {parseFile} from '../src/model/session.ts';
+import {notesOf} from '../src/model/project.ts';
+const temp=await mkdtemp(join(tmpdir(),'shallow-piano-'));process.env.SHALLOWGROOVE_DATA_DIR=temp;process.env.DEEPSEEK_API_KEY='';
+const vite=await createServer({root:new URL('../',import.meta.url).pathname,server:{host:'127.0.0.1',port:0}});let browser;
+try{
+ await vite.listen();browser=await chromium.launch({channel:'chrome',headless:true,args:['--autoplay-policy=no-user-gesture-required']});const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));
+ await page.goto(vite.resolvedUrls.local[0]);await expect(page.getByRole('button',{name:'Play',exact:true})).toBeEnabled({timeout:120000});
+ const panel=page.getByLabel('Experimental MIDI note editor');await expect(panel).toBeVisible();
+ await page.getByRole('button',{name:'＋ 添加轨道',exact:true}).first().click();await page.getByLabel('New track name').fill('Piano test');await page.locator('dialog[open]').getByRole('button',{name:'＋ 添加',exact:true}).click();
+ await expect(panel.locator('.piano-track')).toContainText('Piano test',{timeout:120000});await panel.scrollIntoViewIfNeeded();
+ const surface=panel.locator('.piano-surface'),notes=panel.locator('.piano-note');
+ async function at(tick,pitch){await panel.locator('.piano-scroll').evaluate((el,{tick,pitch})=>{const s=el.querySelector('.piano-surface'),row=Number(s.dataset.rowHeight),q=Number(s.dataset.quarterWidth),ppqn=Number(s.dataset.ppqn);el.scrollTop=Math.max(0,24+(127-pitch)*row-el.clientHeight/2);el.scrollLeft=Math.max(0,tick/ppqn*q-80);},{tick,pitch});await page.waitForTimeout(50);const rect=await surface.boundingBox(),data=await surface.evaluate(el=>({...el.dataset}));return {x:rect.x+48+tick/Number(data.ppqn)*Number(data.quarterWidth)+4,y:rect.y+24+(127-pitch)*Number(data.rowHeight)+Number(data.rowHeight)/2};}
+ let p=await at(0,60);await page.mouse.dblclick(p.x,p.y);await expect(notes).toHaveCount(1,{timeout:120000});await expect(notes.first()).toHaveAttribute('data-end','24');
+ const q0=await surface.getAttribute('data-quarter-width');await panel.getByRole('button',{name:'Zoom time in',exact:true}).click();assert.equal(Number(await surface.getAttribute('data-quarter-width')),Number(q0)*2);await panel.getByRole('button',{name:'Zoom time out',exact:true}).click();
+ const viewport=panel.locator('.piano-scroll'),bounds=await viewport.boundingBox();
+ const anchorX=bounds.x+Math.min(220,bounds.width/2),anchorY=bounds.y+10;
+ const beatAtPointer=()=>viewport.evaluate((el,clientX)=>(el.scrollLeft+clientX-el.getBoundingClientRect().left-48)/Number(el.querySelector('.piano-surface').dataset.quarterWidth),anchorX);
+ const anchorBeat=await beatAtPointer(),original=Number(q0);
+ await page.mouse.move(anchorX,anchorY);await page.mouse.wheel(0,-90);
+ await expect.poll(async()=>Number(await surface.getAttribute('data-quarter-width'))).toBeGreaterThan(original);
+ assert.ok(Math.abs(await beatAtPointer()-anchorBeat)<.03);
+ const wheelScale=Number(await surface.getAttribute('data-quarter-width'));
+ await page.mouse.down();await page.mouse.move(anchorX,anchorY+20,{steps:5});await page.mouse.up();
+ await expect.poll(async()=>Number(await surface.getAttribute('data-quarter-width'))).toBeGreaterThan(wheelScale);
+ assert.ok(Math.abs(await beatAtPointer()-anchorBeat)<.03);
+ await page.mouse.move(anchorX,anchorY);await page.mouse.wheel(0,150);
+ await expect.poll(async()=>Number(await surface.getAttribute('data-quarter-width'))).toBeLessThan(wheelScale);
+ const row0=await surface.getAttribute('data-row-height');await panel.getByRole('button',{name:'Zoom pitch in',exact:true}).click();assert.ok(Number(await surface.getAttribute('data-row-height'))>Number(row0));await panel.getByRole('button',{name:'Zoom pitch out',exact:true}).click();
+ await at(0,60);let box=await notes.first().boundingBox();const row=Number(await surface.getAttribute('data-row-height')),quarter=Number(await surface.getAttribute('data-quarter-width'));
+ await page.mouse.move(box.x+3,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+3+quarter/4,box.y+box.height/2-row*2,{steps:5});await page.mouse.up();
+ await expect(notes.first()).toHaveAttribute('data-pitch','62',{timeout:120000});await expect(notes.first()).toHaveAttribute('data-tick','24');
+ box=await notes.first().boundingBox();await page.mouse.move(box.x+box.width-2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width-2+quarter/4,box.y+box.height/2,{steps:5});await page.mouse.up();await expect(notes.first()).toHaveAttribute('data-end','72',{timeout:120000});
+ await panel.getByLabel('Note velocity').fill('80');await panel.getByRole('button',{name:'应用',exact:true}).click();await expect(notes.first()).toHaveAttribute('data-velocity','80',{timeout:120000});
+ await panel.getByRole('button',{name:'Duplicate notes',exact:true}).click();await expect(notes).toHaveCount(2,{timeout:120000});
+ await panel.getByRole('button',{name:'Delete notes',exact:true}).click();await expect(notes).toHaveCount(1,{timeout:120000});
+ await page.getByRole('button',{name:'Undo',exact:true}).click();await expect(panel.locator('.piano-help')).toContainText('2 音符',{timeout:120000});
+ await page.getByRole('button',{name:'Redo',exact:true}).click();await expect(panel.locator('.piano-help')).toContainText('1 音符',{timeout:120000});
+ await panel.getByRole('button',{name:'Fit notes',exact:true}).click();await expect(notes).toHaveCount(1);await notes.first().click({position:{x:3,y:4}});await panel.press('ArrowUp');await expect(notes.first()).toHaveAttribute('data-pitch','63',{timeout:120000});
+ // A cancelled drag must not mutate the project.
+ box=await notes.first().boundingBox();await page.mouse.move(box.x+3,box.y+4);await page.mouse.down();await page.mouse.move(box.x+35,box.y+4);await page.keyboard.press('Escape');await page.mouse.up();await expect(notes.first()).toHaveAttribute('data-tick','24');
+ await panel.scrollIntoViewIfNeeded();await page.screenshot({path:'/private/tmp/shallow-piano-roll.png'});
+ await page.getByRole('button',{name:'历史 / 保存',exact:true}).click();const download=page.waitForEvent('download');await page.getByRole('button',{name:'导出工程',exact:true}).click();const file=await download,saved=parseFile(await readFile(await file.path(),'utf8'));
+ assert.deepEqual(notesOf(saved.session.project.tracks.at(-1),saved.session.project.timing.end_tick),[{tick:24,end:72,pitch:63,velocity:80}]);
+ assert.ok(saved.history.entries.some(e=>e.source==='user'&&e.label.includes('Notes')));
+ await page.reload();await expect(page.getByRole('button',{name:'Play',exact:true})).toBeEnabled({timeout:120000});await page.getByRole('button',{name:'历史 / 保存',exact:true}).click();await page.locator('input[type=file]').setInputFiles(await file.path());await expect(page.getByRole('button',{name:'Select channel '+saved.session.project.tracks.length,exact:true})).toBeVisible({timeout:120000});await page.getByRole('button',{name:'历史 / 保存',exact:true}).click();await page.getByRole('button',{name:'Select channel '+saved.session.project.tracks.length,exact:true}).click();await panel.getByRole('button',{name:'Fit notes',exact:true}).click();await expect(notes.first()).toHaveAttribute('data-pitch','63');
+ // Shift-select, move the group, then marquee-select and delete it as one undoable edit.
+ p=await at(96,67);await page.mouse.dblclick(p.x,p.y);await expect(panel.locator('.piano-help')).toContainText('2 音符',{timeout:120000});await panel.press('Escape');await panel.getByRole('button',{name:'Fit notes',exact:true}).click();await expect(notes).toHaveCount(2);
+ await notes.filter({hasText:'D♯4'}).click({position:{x:3,y:4}});await notes.filter({hasText:'G4'}).click({position:{x:3,y:4},modifiers:['Shift']});
+ await expect(panel.locator('.piano-help')).toContainText('已选 2');await page.keyboard.press('ArrowRight');
+ await expect(panel.locator('.piano-note[data-pitch="63"]')).toHaveAttribute('data-tick','48',{timeout:120000});await expect(panel.locator('.piano-note[data-pitch="67"]')).toHaveAttribute('data-tick','120');
+ await panel.press('Escape');await expect(panel.locator('.piano-help')).toContainText('已选 0');
+ const rect=await surface.boundingBox(),q=Number(await surface.getAttribute('data-quarter-width')),r=Number(await surface.getAttribute('data-row-height')),ppqn=Number(await surface.getAttribute('data-ppqn'));
+ await page.mouse.move(rect.x+48+20/ppqn*q,rect.y+24+(127-69)*r+r/2);await page.mouse.down();await page.mouse.move(rect.x+48+180/ppqn*q,rect.y+24+(127-61)*r+r/2,{steps:8});await page.mouse.up();
+ await expect(panel.locator('.piano-help')).toContainText('已选 2');await page.keyboard.press('Delete');await expect(notes).toHaveCount(0,{timeout:30000});
+ await page.getByRole('button',{name:'Undo',exact:true}).click();await expect(panel.locator('.piano-help')).toContainText('2 音符',{timeout:120000});
+ await page.setViewportSize({width:900,height:700});await panel.scrollIntoViewIfNeeded();await expect(panel.getByRole('button',{name:'Zoom time in',exact:true})).toBeVisible();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+ assert.deepEqual(errors,[]);console.log('PASS: draw, drag, resize, velocity, duplicate/delete, undo/redo, keyboard, cancel, zoom, export/import, multi-select/marquee, and compact layout');
+}catch(e){throw e;}finally{await browser?.close();await vite.close();await rm(temp,{recursive:true,force:true});}

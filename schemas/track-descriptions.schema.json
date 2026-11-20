@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Shallowgroove Track Descriptions v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "project_id",
+    "title",
+    "default_locale",
+    "supported_locales",
+    "source_midi",
+    "faust_instruments",
+    "tracks"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "default_locale": {
+      "enum": [
+        "zh-CN",
+        "en"
+      ]
+    },
+    "supported_locales": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    },
+    "description": {
+      "$ref": "#/$defs/localized"
+    },
+    "source_midi": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "faust_instruments": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "description",
+          "source_path",
+          "source_sha256",
+          "audio_inputs",
+          "audio_outputs",
+          "voices_per_track",
+          "parameters"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/localized"
+          },
+          "description": {
+            "$ref": "#/$defs/localized"
+          },
+          "source_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "faust_label",
+                "name",
+                "description",
+                "default",
+                "min",
+                "max",
+                "step",
+                "unit"
+              ],
+              "properties": {
+                "name": {
+                  "$ref": "#/$defs/localized"
+                },
+                "description": {
+                  "$ref": "#/$defs/localized"
+                },
+                "default": {
+                  "type": "number"
+                },
+                "min": {
+                  "type": "number"
+                },
+                "max": {
+                  "type": "number"
+                },
+                "step": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "tracks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "midi_channel",
+          "name",
+          "description",
+          "source",
+          "musical_role",
+          "faust"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "midi_channel": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16
+          },
+          "name": {
+            "$ref": "#/$defs/localized"
+          },
+          "description": {
+            "$ref": "#/$defs/localized"
+          },
+          "source": {
+            "type": "object",
+            "required": [
+              "kind",
+              "basis",
+              "program_history",
+              "rhythm_map",
+              "statistics"
+            ],
+            "properties": {
+              "kind": {
+                "const": "midi_events"
+              },
+              "basis": {
+                "$ref": "#/$defs/localized"
+              },
+              "rhythm_map": {
+                "enum": [
+                  0,
+                  1,
+                  2
+                ]
+              }
+            }
+          },
+          "musical_role": {
+            "type": "object",
+            "required": [
+              "status",
+              "description",
+              "review_status"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "inferred",
+                  "unknown"
+                ]
+              },
+              "description": {
+                "$ref": "#/$defs/localized"
+              }
+            }
+          },
+          "faust": {
+            "type": "object",
+            "required": [
+              "initial_assignment",
+              "match_to_source",
+              "proposal"
+            ],
+            "properties": {
+              "initial_assignment": {
+                "type": "string"
+              },
+              "proposal": {
+                "type": "object",
+                "required": [
+                  "status",
+                  "description",
+                  "dsp_source"
+                ],
+                "properties": {
+                  "description": {
+                    "$ref": "#/$defs/localized"
+                  },
+                  "status": {
+                    "const": "not_implemented"
+                  },
+                  "dsp_source": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "localized": {
+      "type": "object",
+      "required": [
+        "zh-CN",
+        "en"
+      ],
+      "properties": {
+        "zh-CN": {
+          "type": "string",
+          "minLength": 1
+        },
+        "en": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}

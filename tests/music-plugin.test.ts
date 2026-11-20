@@ -1,0 +1,17 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';
+import {validateJsonSchemaValue} from '@deepseek-ai/dsh-tools';
+import {buildMusicTools,definitions} from '../server/music-plugin/index.mjs';
+test('all music tools compile through the actual dsh schema DSL before registration',()=>{const tools=buildMusicTools();assert.equal(tools.length,definitions.length);assert.equal(new Set(tools.map(t=>t.name)).size,tools.length);for(const name of ['select_target','set_automation','delete_automation','add_audio_effect','remove_audio_effect','move_audio_effect','bypass_audio_effect','set_channel_mix','seek_transport','set_transport_loop','undo_project','redo_project','export_project','export_history','import_project','inspect_hardware','set_hardware_mapping','remove_hardware_mapping'])assert.ok(tools.some(t=>t.name===name));});
+test('automation point schema accepts complete points and rejects malformed nested values',()=>{const schema=buildMusicTools().find(t=>t.name==='set_automation')!.parameters;assert.deepEqual(validateJsonSchemaValue(schema,{address:'Mix',points:[{tick:0,value:1},{tick:1920,value:0}]},''),[]);for(const point of [{tick:0},{value:1},{tick:'0',value:.2},{tick:0,value:1,unknown:1}])assert.ok(validateJsonSchemaValue(schema,{address:'Mix',points:[point]},'').length>0);});
+test('note tools compile nested batches and reject missing fields and malformed edits',()=>{
+ const tools=buildMusicTools(),inspect=tools.find(t=>t.name==='inspect_notes'),edit=tools.find(t=>t.name==='edit_notes');assert.ok(inspect);assert.ok(edit);
+ assert.deepEqual(validateJsonSchemaValue(edit.parameters,{revision:'r',add:[{tick:0,end:480,pitch:60,velocity:90}],update:[{id:'note:0',pitch:62}],remove:['note:2']},''),[]);
+ for(const input of [{add:[]},{revision:'r',add:[{tick:0,end:480,pitch:60}]},{revision:'r',update:[{pitch:60}]},{revision:'r',add:[{tick:0,end:480,pitch:60,velocity:90,extra:1}]}])assert.ok(validateJsonSchemaValue(edit.parameters,input,'').length>0);
+});
+test('project tempo tool exposes a numeric BPM and optional MIDI reset',()=>{
+ const tool=buildMusicTools().find(t=>t.name==='set_project_tempo');assert.ok(tool);
+ assert.deepEqual(validateJsonSchemaValue(tool.parameters,{bpm:123.45},''),[]);assert.deepEqual(validateJsonSchemaValue(tool.parameters,{resetToMidi:true},''),[]);
+ assert.ok(validateJsonSchemaValue(tool.parameters,{bpm:'fast'},'').length>0);
+});
+test('bulk transpose schema requires a revision and integer semitones; compact inspection is exposed',()=>{const tools=buildMusicTools(),transpose=tools.find(t=>t.name==='transpose_notes')!,inspect=tools.find(t=>t.name==='inspect_notes')!;assert.deepEqual(validateJsonSchemaValue(transpose.parameters,{channel:'8',revision:'r',semitones:-12},''),[]);for(const input of [{semitones:-12},{revision:'r',semitones:-12.5}])assert.ok(validateJsonSchemaValue(transpose.parameters,input,'').length);assert.deepEqual(validateJsonSchemaValue(inspect.parameters,{summaryOnly:true},''),[]);});
+test('bar processing tools expose compact native operations and reject missing scope',()=>{const tools=buildMusicTools(),transform=tools.find(t=>t.name==='transform_notes')!;assert.deepEqual(validateJsonSchemaValue(transform.parameters,{bar:2,revision:'r',operation:'quantize',gridTicks:24},''),[]);for(const input of [{revision:'r',operation:'delete'},{bar:2,operation:'delete'},{bar:2,revision:'r',operation:'unknown'}])assert.ok(validateJsonSchemaValue(transform.parameters,input,'').length);});

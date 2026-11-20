@@ -1,0 +1,10 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';
+import {meterMap,musicalPosition,musicalLabel,barGrid} from '../src/model/meter.ts';
+import type {Project} from '../src/model/project.ts';
+const project:Project={title:'Meter',schema:'test',timing:{ppqn:96,end_tick:4000,default_tempo_us_per_quarter:500000},global_events:[],tracks:[]};
+const signature=(tick:number,n:number,power:number,order=0)=>({tick,order,kind:'meta',type:88,data:[n,power,24,8]});
+test('musical positions use one-based bars/beats and zero-based ticks',()=>{assert.equal(musicalLabel(project,0),'1.1.000');assert.equal(musicalLabel(project,95),'1.1.095');assert.equal(musicalLabel(project,96),'1.2.000');assert.equal(musicalLabel(project,384),'2.1.000');assert.equal(meterMap(project)[0].assumed,true);});
+test('redundant MIDI signatures do not move bar boundaries',()=>{const p={...project,global_events:[signature(0,4,2),signature(769,4,2),signature(769,4,2,1)]};assert.equal(meterMap(p).length,1);assert.equal(musicalLabel(p,1152),'4.1.000');assert.equal(meterMap(p)[0].assumed,false);});
+test('meter changes use denominator beats and preserve consecutive bar numbering',()=>{const p={...project,global_events:[signature(0,4,2),signature(768,6,3)]};assert.equal(musicalLabel(p,768),'3.1.000');assert.equal(musicalLabel(p,816),'3.2.000');assert.equal(musicalLabel(p,1056),'4.1.000');assert.equal(musicalPosition(p,1056).denominator,8);});
+test('mid-bar meter changes shorten the preceding bar; tempo does not change musical position',()=>{const p={...project,global_events:[signature(0,4,2),signature(480,3,2),{tick:500,order:1,kind:'meta',type:81,data:[15,66,64]}]};assert.equal(musicalLabel(p,480),'3.1.000');assert.equal(musicalLabel(p,768),'4.1.000');});
+test('overview grids stay sparse, ordered and keep meter changes',()=>{const p={...project,timing:{...project.timing,end_tick:100000},global_events:[signature(0,4,2),signature(768,3,2)]};const grid=barGrid(p);assert.ok(grid.length<20);assert.ok(grid.some(m=>m.tick===768&&m.change));assert.ok(grid.every((m,i)=>!i||m.tick>grid[i-1].tick));});

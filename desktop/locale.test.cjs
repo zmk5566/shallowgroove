@@ -1,0 +1,20 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {existsSync}=require('node:fs');
+test('locale bridge validates, updates existing windows and constructs initial URL',async()=>{
+ assert.ok(existsSync(__dirname+'/connect-locale.cjs'),'missing locale bridge');
+ const {createConnectLocale}=require('./connect-locale.cjs');
+ const bridge=createConnectLocale();
+ assert.equal(bridge.url('http://127.0.0.1:8766'),'http://127.0.0.1:8766/');
+ await bridge.set('en');
+ assert.equal(bridge.url('http://127.0.0.1:8766'),'http://127.0.0.1:8766/?locale=en');
+ let script;
+ const window={isDestroyed:()=>false,webContents:{executeJavaScript:async value=>{script=value;}}};
+ await bridge.set('zh-CN',window);
+ assert.match(script,/setLocale\("zh-CN"\)/);
+ script=undefined;
+ assert.equal(await bridge.set('en";alert(1)',window),false);
+ assert.equal(script,undefined);
+ assert.equal(bridge.url('http://127.0.0.1:8766'),'http://127.0.0.1:8766/?locale=zh-CN');
+ await bridge.apply(window);assert.match(script,/setLocale\("zh-CN"\)/);
+});

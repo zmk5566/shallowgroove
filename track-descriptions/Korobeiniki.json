@@ -1,0 +1,657 @@
+{
+  "$schema": "../schemas/track-descriptions.schema.json",
+  "schema_version": 1,
+  "project_id": "Korobeiniki",
+  "title": "Korobeiniki",
+  "default_locale": "zh-CN",
+  "supported_locales": [
+    "zh-CN",
+    "en"
+  ],
+  "source_midi": {
+    "path": "../midi/Korobeiniki.mid",
+    "sha256": "e7349c60e925ef37e6619538e7685118f3d6b7484ebe8c1faf32e90b0e041bd3"
+  },
+  "description": {
+    "zh-CN": "按原始 MIDI 事件解释的轨道描述；音乐角色与 Faust 建议不是原文件内容。",
+    "en": "Track descriptions decoded from MIDI events; musical roles and Faust proposals are editorial additions."
+  },
+  "faust_instruments": {
+    "shallow-synth-v1": {
+      "name": {
+        "zh-CN": "基础 Faust 合成器",
+        "en": "Basic Faust synth"
+      },
+      "status": "prototype",
+      "description": {
+        "zh-CN": "用于对照的基础音色，不还原原 MIDI 的 GM/GS 音色。",
+        "en": "Baseline comparison patch; it does not reproduce the source GM/GS sounds."
+      },
+      "source_path": "../src/audio/synth.dsp",
+      "source_sha256": "c91a04b2bf679a84ae097cdaf2b0cddb01c839456b880f1e9203eb5f55a9fc4d",
+      "audio_inputs": 0,
+      "audio_outputs": 2,
+      "voices_per_track": 16,
+      "midi_voice_controls": [
+        "freq",
+        "gain",
+        "gate"
+      ],
+      "parameters": [
+        {
+          "id": "level",
+          "faust_label": "Level",
+          "name": {
+            "zh-CN": "音量",
+            "en": "Level"
+          },
+          "description": {
+            "zh-CN": "每个合成声部的输出电平",
+            "en": "Output level per synthesized voice"
+          },
+          "default": 0.18,
+          "min": 0,
+          "max": 0.5,
+          "step": 0.001,
+          "unit": "linear"
+        },
+        {
+          "id": "attack",
+          "faust_label": "Attack",
+          "name": {
+            "zh-CN": "起音",
+            "en": "Attack"
+          },
+          "description": {
+            "zh-CN": "振幅包络的起音时间",
+            "en": "Amplitude envelope attack time"
+          },
+          "default": 0.008,
+          "min": 0.001,
+          "max": 1,
+          "step": 0.001,
+          "unit": "s"
+        },
+        {
+          "id": "release",
+          "faust_label": "Release",
+          "name": {
+            "zh-CN": "释音",
+            "en": "Release"
+          },
+          "description": {
+            "zh-CN": "松开音符后的释音时间",
+            "en": "Release time after note-off"
+          },
+          "default": 0.18,
+          "min": 0.01,
+          "max": 2,
+          "step": 0.01,
+          "unit": "s"
+        },
+        {
+          "id": "tone",
+          "faust_label": "Tone",
+          "name": {
+            "zh-CN": "音色",
+            "en": "Tone"
+          },
+          "description": {
+            "zh-CN": "正弦波与锯齿波之间的混合",
+            "en": "Blend between sine and sawtooth"
+          },
+          "default": 0.3,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "unit": "normalized"
+        }
+      ],
+      "parameter_binding": "faust_label is descriptive; resolve actual addresses from compiled Faust UI metadata",
+      "scope": "initial project assignment; live edits are not synchronized to this descriptor"
+    },
+    "korobeiniki-bass": {
+      "name": {
+        "zh-CN": "脉冲贝斯",
+        "en": "Pulse bass"
+      },
+      "description": {
+        "zh-CN": "SID 第 1 声部的可编辑转谱，使用脉冲贝斯音色。",
+        "en": "SID voice 1 transcribed for pulse bass."
+      },
+      "status": "prototype",
+      "source_sha256": "e2e70fee6c4798830bc57839f550f5c7b673e3cf160e09d63ef73241728647a2",
+      "parameters": [
+        {
+          "id": "attack",
+          "faust_label": "Attack",
+          "name": {
+            "zh-CN": "起音",
+            "en": "Attack"
+          },
+          "description": {
+            "zh-CN": "起音控制",
+            "en": "Amplitude attack time"
+          },
+          "default": 0.004,
+          "min": 0.001,
+          "max": 0.5,
+          "step": 0.001,
+          "unit": "s"
+        },
+        {
+          "id": "release",
+          "faust_label": "Release",
+          "name": {
+            "zh-CN": "释音",
+            "en": "Release"
+          },
+          "description": {
+            "zh-CN": "释音控制",
+            "en": "Amplitude release time"
+          },
+          "default": 0.025,
+          "min": 0.005,
+          "max": 0.5,
+          "step": 0.001,
+          "unit": "s"
+        }
+      ],
+      "hardware_inspiration": "Commodore 64 SID",
+      "hardware_attribution": "ShallowGroove synthesis",
+      "source_refs": [
+        "hvsc"
+      ],
+      "source_path": "../patches/korobeiniki/bass.dsp",
+      "audio_inputs": 0,
+      "audio_outputs": 2,
+      "voices_per_track": 16,
+      "midi_voice_controls": [
+        "freq",
+        "gain",
+        "gate"
+      ],
+      "mix_gain": 0.83,
+      "pan": 0,
+      "scope": "Initial period-inspired sound set; live edits are not synchronized."
+    },
+    "korobeiniki-lead": {
+      "name": {
+        "zh-CN": "芯片主音",
+        "en": "Chip lead"
+      },
+      "description": {
+        "zh-CN": "SID 第 2 声部的可编辑转谱，使用芯片主音音色。",
+        "en": "SID voice 2 transcribed for chip lead."
+      },
+      "status": "prototype",
+      "source_sha256": "53f8c457834be8da2ae1fa658c03bf3fd53bfff10af06662103c94b96b9d789a",
+      "parameters": [
+        {
+          "id": "attack",
+          "faust_label": "Attack",
+          "name": {
+            "zh-CN": "起音",
+            "en": "Attack"
+          },
+          "description": {
+            "zh-CN": "起音控制",
+            "en": "Amplitude attack time"
+          },
+          "default": 0.008,
+          "min": 0.001,
+          "max": 0.5,
+          "step": 0.001,
+          "unit": "s"
+        },
+        {
+          "id": "release",
+          "faust_label": "Release",
+          "name": {
+            "zh-CN": "释音",
+            "en": "Release"
+          },
+          "description": {
+            "zh-CN": "释音控制",
+            "en": "Amplitude release time"
+          },
+          "default": 0.055,
+          "min": 0.005,
+          "max": 0.5,
+          "step": 0.001,
+          "unit": "s"
+        }
+      ],
+      "hardware_inspiration": "Commodore 64 SID",
+      "hardware_attribution": "ShallowGroove synthesis",
+      "source_refs": [
+        "hvsc"
+      ],
+      "source_path": "../patches/korobeiniki/lead.dsp",
+      "audio_inputs": 0,
+      "audio_outputs": 2,
+      "voices_per_track": 16,
+      "midi_voice_controls": [
+        "freq",
+        "gain",
+        "gate"
+      ],
+      "mix_gain": 0.94,
+      "pan": 0,
+      "scope": "Initial period-inspired sound set; live edits are not synchronized."
+    },
+    "korobeiniki-arp": {
+      "name": {
+        "zh-CN": "脉冲琶音",
+        "en": "Pulse arpeggio"
+      },
+      "description": {
+        "zh-CN": "SID 第 3 声部的可编辑转谱，使用脉冲琶音音色。",
+        "en": "SID voice 3 transcribed for pulse arpeggio."
+      },
+      "status": "prototype",
+      "source_sha256": "8147fa6061e215c842c8fb499e83ee3a448db77a90ac70f311eb63b97266a0b9",
+      "parameters": [
+        {
+          "id": "attack",
+          "faust_label": "Attack",
+          "name": {
+            "zh-CN": "起音",
+            "en": "Attack"
+          },
+          "description": {
+            "zh-CN": "起音控制",
+            "en": "Amplitude attack time"
+          },
+          "default": 0.003,
+          "min": 0.001,
+          "max": 0.5,
+          "step": 0.001,
+          "unit": "s"
+        },
+        {
+          "id": "release",
+          "faust_label": "Release",
+          "name": {
+            "zh-CN": "释音",
+            "en": "Release"
+          },
+          "description": {
+            "zh-CN": "释音控制",
+            "en": "Amplitude release time"
+          },
+          "default": 0.025,
+          "min": 0.005,
+          "max": 0.5,
+          "step": 0.001,
+          "unit": "s"
+        }
+      ],
+      "hardware_inspiration": "Commodore 64 SID",
+      "hardware_attribution": "ShallowGroove synthesis",
+      "source_refs": [
+        "hvsc"
+      ],
+      "source_path": "../patches/korobeiniki/arp.dsp",
+      "audio_inputs": 0,
+      "audio_outputs": 2,
+      "voices_per_track": 16,
+      "midi_voice_controls": [
+        "freq",
+        "gain",
+        "gate"
+      ],
+      "mix_gain": 0.65,
+      "pan": 0,
+      "scope": "Initial period-inspired sound set; live edits are not synchronized."
+    },
+    "korobeiniki-accents": {
+      "name": {
+        "zh-CN": "芯片踩镲",
+        "en": "Chip Hi-Hat"
+      },
+      "description": {
+        "zh-CN": "带限的一位噪声合成闭合踩镲，两个触发音有不同的尾音长度。",
+        "en": "A closed chip hi-hat made from filtered one-bit noise, with two tail lengths."
+      },
+      "status": "prototype",
+      "source_sha256": "2c2847b1c50c0d11f3ddf23f211a53b26ff9c4cab108bb95f46080c09f63c77d",
+      "parameters": [
+        {
+          "id": "attack",
+          "faust_label": "Attack",
+          "name": {
+            "zh-CN": "起音",
+            "en": "Attack"
+          },
+          "description": {
+            "zh-CN": "起音控制",
+            "en": "Amplitude attack time"
+          },
+          "default": 0.003,
+          "min": 0.001,
+          "max": 0.02,
+          "step": 0.001,
+          "unit": "s"
+        },
+        {
+          "id": "brightness",
+          "faust_label": "Brightness",
+          "name": {
+            "zh-CN": "亮度",
+            "en": "Brightness"
+          },
+          "description": {
+            "zh-CN": "亮度控制",
+            "en": "Filter brightness"
+          },
+          "default": 0.35,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "unit": "linear"
+        },
+        {
+          "id": "release",
+          "faust_label": "Release",
+          "name": {
+            "zh-CN": "释音",
+            "en": "Release"
+          },
+          "description": {
+            "zh-CN": "释音控制",
+            "en": "Amplitude release time"
+          },
+          "default": 0.038,
+          "min": 0.005,
+          "max": 0.18,
+          "step": 0.001,
+          "unit": "s"
+        }
+      ],
+      "hardware_inspiration": "Commodore 64 SID",
+      "hardware_attribution": "ShallowGroove synthesis",
+      "source_refs": [
+        "hvsc"
+      ],
+      "source_path": "../patches/korobeiniki/hi-hat.dsp",
+      "audio_inputs": 0,
+      "audio_outputs": 2,
+      "voices_per_track": 16,
+      "midi_voice_controls": [
+        "freq",
+        "gain",
+        "gate"
+      ],
+      "mix_gain": 0.83,
+      "pan": 0,
+      "scope": "Initial period-inspired sound set; live edits are not synchronized."
+    }
+  },
+  "tracks": [
+    {
+      "id": "midi-channel-1",
+      "midi_channel": 1,
+      "name": {
+        "zh-CN": "脉冲贝斯",
+        "en": "Pulse bass"
+      },
+      "description": {
+        "zh-CN": "SID 第 1 声部的可编辑转谱，使用脉冲贝斯音色。",
+        "en": "SID voice 1 transcribed for pulse bass."
+      },
+      "source": {
+        "kind": "midi_events",
+        "name_status": "decoded_not_authored",
+        "instrument": "Synth Bass 1",
+        "basis": {
+          "zh-CN": "Program Change 对应的 GM 基础音色",
+          "en": "GM base sound derived from Program Change"
+        },
+        "initial_program": {
+          "tick": 0,
+          "program_zero_based": 38,
+          "bank_msb": 0,
+          "bank_lsb": 0
+        },
+        "program_history": [
+          {
+            "tick": 0,
+            "program_zero_based": 38,
+            "bank_msb": 0,
+            "bank_lsb": 0
+          }
+        ],
+        "rhythm_map": 0,
+        "bank_variant_status": "not_applicable",
+        "statistics": {
+          "note_on_count": 1706,
+          "midi_pitch_range": [
+            33,
+            56
+          ]
+        }
+      },
+      "musical_role": {
+        "status": "unknown",
+        "description": {
+          "zh-CN": "尚未分析编曲角色",
+          "en": "Musical role has not been analyzed"
+        },
+        "basis": null,
+        "review_status": "not_auditioned"
+      },
+      "faust": {
+        "initial_assignment": "korobeiniki-bass",
+        "match_to_source": "approximation_not_verified_against_original_recording",
+        "proposal": {
+          "status": "not_implemented",
+          "family": "bass",
+          "description": {
+            "zh-CN": "SID 第 1 声部的可编辑转谱，使用脉冲贝斯音色。",
+            "en": "SID voice 1 transcribed for pulse bass."
+          },
+          "dsp_source": null
+        }
+      }
+    },
+    {
+      "id": "midi-channel-2",
+      "midi_channel": 2,
+      "name": {
+        "zh-CN": "芯片主音",
+        "en": "Chip lead"
+      },
+      "description": {
+        "zh-CN": "SID 第 2 声部的可编辑转谱，使用芯片主音音色。",
+        "en": "SID voice 2 transcribed for chip lead."
+      },
+      "source": {
+        "kind": "midi_events",
+        "name_status": "decoded_not_authored",
+        "instrument": "Lead 1 (square)",
+        "basis": {
+          "zh-CN": "Program Change 对应的 GM 基础音色",
+          "en": "GM base sound derived from Program Change"
+        },
+        "initial_program": {
+          "tick": 0,
+          "program_zero_based": 80,
+          "bank_msb": 0,
+          "bank_lsb": 0
+        },
+        "program_history": [
+          {
+            "tick": 0,
+            "program_zero_based": 80,
+            "bank_msb": 0,
+            "bank_lsb": 0
+          }
+        ],
+        "rhythm_map": 0,
+        "bank_variant_status": "not_applicable",
+        "statistics": {
+          "note_on_count": 411,
+          "midi_pitch_range": [
+            49,
+            87
+          ]
+        }
+      },
+      "musical_role": {
+        "status": "unknown",
+        "description": {
+          "zh-CN": "尚未分析编曲角色",
+          "en": "Musical role has not been analyzed"
+        },
+        "basis": null,
+        "review_status": "not_auditioned"
+      },
+      "faust": {
+        "initial_assignment": "korobeiniki-lead",
+        "match_to_source": "approximation_not_verified_against_original_recording",
+        "proposal": {
+          "status": "not_implemented",
+          "family": "pitched",
+          "description": {
+            "zh-CN": "SID 第 2 声部的可编辑转谱，使用芯片主音音色。",
+            "en": "SID voice 2 transcribed for chip lead."
+          },
+          "dsp_source": null
+        }
+      }
+    },
+    {
+      "id": "midi-channel-3",
+      "midi_channel": 3,
+      "name": {
+        "zh-CN": "脉冲琶音",
+        "en": "Pulse arpeggio"
+      },
+      "description": {
+        "zh-CN": "SID 第 3 声部的可编辑转谱，使用脉冲琶音音色。",
+        "en": "SID voice 3 transcribed for pulse arpeggio."
+      },
+      "source": {
+        "kind": "midi_events",
+        "name_status": "decoded_not_authored",
+        "instrument": "Lead 2 (sawtooth)",
+        "basis": {
+          "zh-CN": "Program Change 对应的 GM 基础音色",
+          "en": "GM base sound derived from Program Change"
+        },
+        "initial_program": {
+          "tick": 0,
+          "program_zero_based": 81,
+          "bank_msb": 0,
+          "bank_lsb": 0
+        },
+        "program_history": [
+          {
+            "tick": 0,
+            "program_zero_based": 81,
+            "bank_msb": 0,
+            "bank_lsb": 0
+          }
+        ],
+        "rhythm_map": 0,
+        "bank_variant_status": "not_applicable",
+        "statistics": {
+          "note_on_count": 1622,
+          "midi_pitch_range": [
+            48,
+            106
+          ]
+        }
+      },
+      "musical_role": {
+        "status": "unknown",
+        "description": {
+          "zh-CN": "尚未分析编曲角色",
+          "en": "Musical role has not been analyzed"
+        },
+        "basis": null,
+        "review_status": "not_auditioned"
+      },
+      "faust": {
+        "initial_assignment": "korobeiniki-arp",
+        "match_to_source": "approximation_not_verified_against_original_recording",
+        "proposal": {
+          "status": "not_implemented",
+          "family": "pitched",
+          "description": {
+            "zh-CN": "SID 第 3 声部的可编辑转谱，使用脉冲琶音音色。",
+            "en": "SID voice 3 transcribed for pulse arpeggio."
+          },
+          "dsp_source": null
+        }
+      }
+    },
+    {
+      "id": "midi-channel-4",
+      "midi_channel": 4,
+      "name": {
+        "zh-CN": "芯片踩镲",
+        "en": "Chip Hi-Hat"
+      },
+      "description": {
+        "zh-CN": "带限的一位噪声合成闭合踩镲，两个触发音有不同的尾音长度。",
+        "en": "A closed chip hi-hat made from filtered one-bit noise, with two tail lengths."
+      },
+      "source": {
+        "kind": "midi_events",
+        "name_status": "decoded_not_authored",
+        "instrument": "Synth Bass 1",
+        "basis": {
+          "zh-CN": "Program Change 对应的 GM 基础音色",
+          "en": "GM base sound derived from Program Change"
+        },
+        "initial_program": {
+          "tick": 0,
+          "program_zero_based": 38,
+          "bank_msb": 0,
+          "bank_lsb": 0
+        },
+        "program_history": [
+          {
+            "tick": 0,
+            "program_zero_based": 38,
+            "bank_msb": 0,
+            "bank_lsb": 0
+          }
+        ],
+        "rhythm_map": 0,
+        "bank_variant_status": "not_applicable",
+        "statistics": {
+          "note_on_count": 516,
+          "midi_pitch_range": [
+            103,
+            106
+          ]
+        }
+      },
+      "musical_role": {
+        "status": "unknown",
+        "description": {
+          "zh-CN": "尚未分析编曲角色",
+          "en": "Musical role has not been analyzed"
+        },
+        "basis": null,
+        "review_status": "not_auditioned"
+      },
+      "faust": {
+        "initial_assignment": "korobeiniki-accents",
+        "match_to_source": "approximation_not_verified_against_original_recording",
+        "proposal": {
+          "status": "not_implemented",
+          "family": "bass",
+          "description": {
+            "zh-CN": "带限的一位噪声合成闭合踩镲，两个触发音有不同的尾音长度。",
+            "en": "A closed chip hi-hat made from filtered one-bit noise, with two tail lengths."
+          },
+          "dsp_source": null
+        }
+      }
+    }
+  ]
+}

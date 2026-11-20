@@ -1,0 +1,15 @@
+declare name "Stereo Delay";
+import("stdfaust.lib");
+sync=hslider("Sync",1,0,1,1);
+division=hslider("Division",1,0,3,1);
+bpm=hslider("BPM",120,20,400,0.001);
+ms=hslider("Time[unit:ms]",250,10,2000,5);
+beats=select2(division==0,select2(division==1,select2(division==2,0.25,0.75),0.5),1);
+time=select2(sync,ms*0.001,60/max(20,bpm)*beats):si.smoo;
+feedback=hslider("Feedback",0.32,0,0.85,0.01):si.smoo;
+cutoff=hslider("High Cut[unit:Hz]",6000,800,16000,100):si.smoo;
+mixTarget=hslider("Mix",0.25,0,1,0.01);
+mix=select2(mixTarget>=1,mixTarget:si.smoo,1);
+echo=(+ : de.fdelay(1048576,min(1048575,time*ma.SR)) : fi.highpass(1,100) : fi.lowpass(1,cutoff)) ~ *(feedback);
+channel(x)=x*(1-mix)+(x:echo)*mix;
+process=channel,channel;

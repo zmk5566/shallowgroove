@@ -1,0 +1,10 @@
+declare name "Stereo Reverb";
+import("stdfaust.lib");
+room=hslider("Room",0.65,0,0.95,0.01):si.smoo;
+damping=hslider("Damping",0.45,0,0.95,0.01):si.smoo;
+pre=hslider("Pre-delay[unit:ms]",18,0,100,1)*0.001*ma.SR:si.smoo;
+mixTarget=hslider("Mix",0.2,0,1,0.01);
+mix=select2(mixTarget>=1,mixTarget:si.smoo,1);
+wet=de.fdelay(32768,pre),de.fdelay(32768,pre):re.stereo_freeverb(0.55+room*0.35,0.5,damping,23):*(0.15),*(0.15);
+blend(l,r,a,b)=l*(1-mix)+a*mix,r*(1-mix)+b*mix;
+process=_,_ <: _,_,wet : blend;

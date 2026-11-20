@@ -1,0 +1,10 @@
+import("stdfaust.lib");
+declare name "Pulse bass";
+freq = hslider("freq",440,20,20000,1);
+gain = hslider("gain",0.5,0,1,0.001);
+gate = button("gate");
+attack = hslider("Attack[unit:s]",0.004,0.001,0.5,0.001);
+release = hslider("Release[unit:s]",0.025,0.005,0.5,0.001);
+tone = 0.68*os.square(freq)+0.32*os.triangle(freq);
+voice = tone*0.28*gain*en.adsr(attack,0.06,0.48,release,gate);
+process = voice <: _,_;

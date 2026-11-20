@@ -1,0 +1,384 @@
+{
+  "project_id": "DaisyBell",
+  "sources": [
+    {
+      "id": "loc",
+      "url": "https://blogs.loc.gov/now-see-hear/2014/05/singing-circuits/",
+      "scope": "Historical roles in the Bell Labs performance"
+    },
+    {
+      "id": "transfer",
+      "url": "https://www.youtube.com/watch?v=41U78QP8nBk",
+      "scope": "Pitch, register and section order of the selected video"
+    }
+  ],
+  "patches": [
+    {
+      "id": "daisy-keys",
+      "track_id": "midi-channel-1",
+      "midi_channel": 1,
+      "file": "keys.dsp",
+      "name": {
+        "zh-CN": "电子琴伴奏",
+        "en": "Pulse keys"
+      },
+      "description": {
+        "zh-CN": "低音区的电子伴奏，和弦以基音和较弱的奇次泛音为主。",
+        "en": "Lower-register electronic accompaniment with a strong fundamental and quiet odd harmonics."
+      },
+      "status": "prototype",
+      "source_sha256": "a39d8193baac53c1dd6b15fafddefdd770211cc22f2160b2790367b630fe15a8",
+      "parameters": [
+        {
+          "id": "attack",
+          "faust_label": "Attack",
+          "name": {
+            "zh-CN": "起音",
+            "en": "Attack"
+          },
+          "description": {
+            "zh-CN": "起音控制",
+            "en": "Amplitude attack time"
+          },
+          "default": 0.005,
+          "min": 0.001,
+          "max": 0.5,
+          "step": 0.001,
+          "unit": "s"
+        },
+        {
+          "id": "brightness",
+          "faust_label": "Brightness",
+          "name": {
+            "zh-CN": "亮度",
+            "en": "Brightness"
+          },
+          "description": {
+            "zh-CN": "亮度控制",
+            "en": "Filter brightness"
+          },
+          "default": 0.42,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "unit": "linear"
+        },
+        {
+          "id": "decay",
+          "faust_label": "Decay",
+          "name": {
+            "zh-CN": "衰减",
+            "en": "Decay"
+          },
+          "description": {
+            "zh-CN": "衰减控制",
+            "en": "Envelope decay time"
+          },
+          "default": 0.18,
+          "min": 0.005,
+          "max": 1,
+          "step": 0.005,
+          "unit": "s"
+        },
+        {
+          "id": "release",
+          "faust_label": "Release",
+          "name": {
+            "zh-CN": "释音",
+            "en": "Release"
+          },
+          "description": {
+            "zh-CN": "释音控制",
+            "en": "Amplitude release time"
+          },
+          "default": 0.19,
+          "min": 0.02,
+          "max": 0.45,
+          "step": 0.005,
+          "unit": "s"
+        },
+        {
+          "id": "sustain",
+          "faust_label": "Sustain",
+          "name": {
+            "zh-CN": "持续电平",
+            "en": "Sustain"
+          },
+          "description": {
+            "zh-CN": "持续电平控制",
+            "en": "Held-note amplitude"
+          },
+          "default": 0.52,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "unit": "linear"
+        }
+      ],
+      "hardware_inspiration": "1961 Bell Labs computer music demonstration",
+      "hardware_attribution": "Contemporary ShallowGroove synthesis design",
+      "source_refs": [
+        "loc",
+        "transfer"
+      ],
+      "mix_gain": 0.86,
+      "pan": 0
+    },
+    {
+      "id": "daisy-vowel",
+      "track_id": "midi-channel-2",
+      "midi_channel": 2,
+      "file": "vowel.dsp",
+      "name": {
+        "zh-CN": "合成歌声",
+        "en": "Singing voice"
+      },
+      "description": {
+        "zh-CN": "周期脉冲和轻微调频提供声源，三组共振滤波器塑造口形。元音和擦音由可编辑包络随音节变化。",
+        "en": "A periodic pulse with light FM excites three vocal resonances. Editable vowel and frication lanes articulate the syllables."
+      },
+      "status": "prototype",
+      "source_sha256": "5c6a9ddcadc0fec87c1ae24492a1f8c50be23156d413b54d849de5c193c46a48",
+      "parameters": [
+        {
+          "id": "attack",
+          "faust_label": "Attack",
+          "name": {
+            "zh-CN": "起音",
+            "en": "Attack"
+          },
+          "description": {
+            "zh-CN": "起音控制",
+            "en": "Amplitude attack time"
+          },
+          "default": 0.009,
+          "min": 0.001,
+          "max": 0.5,
+          "step": 0.001,
+          "unit": "s"
+        },
+        {
+          "id": "decay",
+          "faust_label": "Decay",
+          "name": {
+            "zh-CN": "衰减",
+            "en": "Decay"
+          },
+          "description": {
+            "zh-CN": "衰减控制",
+            "en": "Envelope decay time"
+          },
+          "default": 0.17,
+          "min": 0.005,
+          "max": 1,
+          "step": 0.005,
+          "unit": "s"
+        },
+        {
+          "id": "frication",
+          "faust_label": "Frication",
+          "name": {
+            "zh-CN": "擦音",
+            "en": "Frication"
+          },
+          "description": {
+            "zh-CN": "擦音控制",
+            "en": "Unvoiced consonant noise"
+          },
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "unit": "linear"
+        },
+        {
+          "id": "release",
+          "faust_label": "Release",
+          "name": {
+            "zh-CN": "释音",
+            "en": "Release"
+          },
+          "description": {
+            "zh-CN": "释音控制",
+            "en": "Amplitude release time"
+          },
+          "default": 0.13,
+          "min": 0.02,
+          "max": 0.45,
+          "step": 0.005,
+          "unit": "s"
+        },
+        {
+          "id": "sustain",
+          "faust_label": "Sustain",
+          "name": {
+            "zh-CN": "持续电平",
+            "en": "Sustain"
+          },
+          "description": {
+            "zh-CN": "持续电平控制",
+            "en": "Held-note amplitude"
+          },
+          "default": 0.74,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "unit": "linear"
+        },
+        {
+          "id": "vowel",
+          "faust_label": "Vowel",
+          "name": {
+            "zh-CN": "元音",
+            "en": "Vowel"
+          },
+          "description": {
+            "zh-CN": "元音控制",
+            "en": "Fixed formant color"
+          },
+          "default": 0.74,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "unit": "linear"
+        }
+      ],
+      "hardware_inspiration": "1961 Bell Labs computer music demonstration",
+      "hardware_attribution": "Contemporary ShallowGroove synthesis design",
+      "source_refs": [
+        "loc",
+        "transfer"
+      ],
+      "mix_gain": 1,
+      "pan": 0
+    },
+    {
+      "id": "daisy-harmony",
+      "track_id": "midi-channel-3",
+      "midi_channel": 3,
+      "file": "harmony.dsp",
+      "name": {
+        "zh-CN": "簧管主音",
+        "en": "Reed lead"
+      },
+      "description": {
+        "zh-CN": "以奇次泛音奏出四小节前奏。",
+        "en": "Odd harmonics carry the four-bar introduction."
+      },
+      "status": "prototype",
+      "source_sha256": "471b3caa263e4c14788bd4210a5c4594919f9d5a581227f2c0a36dc31edd552c",
+      "parameters": [
+        {
+          "id": "attack",
+          "faust_label": "Attack",
+          "name": {
+            "zh-CN": "起音",
+            "en": "Attack"
+          },
+          "description": {
+            "zh-CN": "起音控制",
+            "en": "Amplitude attack time"
+          },
+          "default": 0.006,
+          "min": 0.001,
+          "max": 0.5,
+          "step": 0.001,
+          "unit": "s"
+        },
+        {
+          "id": "decay",
+          "faust_label": "Decay",
+          "name": {
+            "zh-CN": "衰减",
+            "en": "Decay"
+          },
+          "description": {
+            "zh-CN": "衰减控制",
+            "en": "Envelope decay time"
+          },
+          "default": 0.14,
+          "min": 0.005,
+          "max": 1,
+          "step": 0.005,
+          "unit": "s"
+        },
+        {
+          "id": "release",
+          "faust_label": "Release",
+          "name": {
+            "zh-CN": "释音",
+            "en": "Release"
+          },
+          "description": {
+            "zh-CN": "释音控制",
+            "en": "Amplitude release time"
+          },
+          "default": 0.16,
+          "min": 0.02,
+          "max": 0.45,
+          "step": 0.005,
+          "unit": "s"
+        },
+        {
+          "id": "sustain",
+          "faust_label": "Sustain",
+          "name": {
+            "zh-CN": "持续电平",
+            "en": "Sustain"
+          },
+          "description": {
+            "zh-CN": "持续电平控制",
+            "en": "Held-note amplitude"
+          },
+          "default": 0.88,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "unit": "linear"
+        },
+        {
+          "id": "swell",
+          "faust_label": "Swell",
+          "name": {
+            "zh-CN": "渐强",
+            "en": "Swell"
+          },
+          "description": {
+            "zh-CN": "渐强控制",
+            "en": "Reed swell time after onset"
+          },
+          "default": 0.075,
+          "min": 0.005,
+          "max": 0.6,
+          "step": 0.005,
+          "unit": "s"
+        },
+        {
+          "id": "warmth",
+          "faust_label": "Warmth",
+          "name": {
+            "zh-CN": "温暖度",
+            "en": "Warmth"
+          },
+          "description": {
+            "zh-CN": "温暖度控制",
+            "en": "Upper harmonic level"
+          },
+          "default": 0.26,
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "unit": "linear"
+        }
+      ],
+      "hardware_inspiration": "1961 Bell Labs computer music demonstration",
+      "hardware_attribution": "Contemporary ShallowGroove synthesis design",
+      "source_refs": [
+        "loc",
+        "transfer"
+      ],
+      "mix_gain": 1,
+      "pan": 0
+    }
+  ]
+}

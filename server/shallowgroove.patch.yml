@@ -1,0 +1,33 @@
+# Keep the SDK kernel, persistence and DeepSeek adapter; expose music tools and native DeepSeek search.
+- id: persistent-bash
+  disabled: true
+- id: persistent-pwsh
+  disabled: true
+- id: terminal-bash
+  disabled: true
+- id: terminal-pwsh
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-working-directory
+  disabled: true
+- insert:
+    - id: web
+      name: '@deepseek-ai/dsh-web'
+      config:
+        searchProvider: deepseek-official
+    - id: web-search-deepseek
+      name: '@deepseek-ai/dsh-web-search-deepseek'
+      config:
+        apiKeyEnv: DEEPSEEK_API_KEY
+    - id: tool-web
+      name: '@deepseek-ai/dsh-tool-web'
+      config:
+        search: true
+        fetch: false
+    - id: shallowgroove-music-tools
+      name: shallowgroove-music-tools
+
+- id: llm-deepseek
+  config:
+    baseURL: !!js process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/anthropic"

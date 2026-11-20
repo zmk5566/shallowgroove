@@ -1,0 +1,11 @@
+import("stdfaust.lib");
+declare name "Shallow Synth";
+freq = hslider("freq",440,20,20000,1);
+gain = hslider("gain",0.5,0,1,0.001);
+gate = button("gate");
+level = hslider("Level",0.18,0,0.5,0.001);
+attack = hslider("Attack[unit:s]",0.008,0.001,1,0.001);
+release = hslider("Release[unit:s]",0.18,0.01,2,0.01);
+tone = hslider("Tone",0.3,0,1,0.01);
+voice = (os.osc(freq)*(1-tone)+os.sawtooth(freq)*tone)*gain*level*en.adsr(attack,0.12,0.65,release,gate);
+process = voice <: _,_;
