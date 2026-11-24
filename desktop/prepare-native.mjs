@@ -42,7 +42,7 @@ async function verifyWindows(binary){
 
 export async function prepareNative(destination,platform){
  const binary=join(destination,bridge.engineName(platform));
- if(platform==='win32'&&process.platform!=='win32'){
+ if(platform==='win32'&&(process.platform!=='win32'||process.env.SG_WINDOWS_NATIVE_RUNTIME)){
   const source=process.env.SG_WINDOWS_NATIVE_RUNTIME;
   if(!source)throw Error('Set SG_WINDOWS_NATIVE_RUNTIME to the unpacked windows-x64-native runtime built on Windows.');
   await cp(source,destination,{recursive:true,dereference:true});

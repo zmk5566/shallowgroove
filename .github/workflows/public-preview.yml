@@ -1,0 +1,74 @@
+name: Public preview packages
+on:
+  workflow_dispatch:
+  push:
+    branches: ['release/*-pre.*']
+permissions:
+  contents: read
+jobs:
+  native-windows:
+    uses: ./.github/workflows/windows-native.yml
+  package:
+    needs: native-windows
+    runs-on: ${{ matrix.target == 'Windows-x64' && 'windows-2022' || 'macos-15' }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [macOS-arm64, Windows-x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Prepare public HexConnect companion
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          archive="$RUNNER_TEMP/companion.zip"
+          curl -fLsS --retry 3 "https://github.com/zmk5566/shallowgroove/releases/download/v0.4.1/ShallowGroove-v0.4.1-$TARGET.zip" -o "$archive"
+          if [[ "$TARGET" == macOS-arm64 ]]; then
+            hash=f73b2e7029cc41eef376fff91970538c5387f782fce6b8472474fa3d411ade50
+            ditto_path="ShallowGroove.app/Contents/Resources/connect-service"
+          else
+            hash=fb7c0fa630ee884e3756605806d48a87c5626779bb1c12073d16017f72f886d0
+            ditto_path="ShallowGroove-win32-x64/resources/connect-service"
+          fi
+          actual=$(openssl dgst -sha256 "$archive" | awk '{print $NF}')
+          test "$actual" = "$hash"
+          unzip -q "$archive" "$ditto_path/*" -d "$RUNNER_TEMP/previous"
+          echo "SG_CONNECT_SERVICE=$RUNNER_TEMP/previous/$ditto_path" >> "$GITHUB_ENV"
+      - if: matrix.target == 'Windows-x64'
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-native
+          path: build/windows-x64-native
+      - run: npm ci --no-audit --no-fund
+      - run: npm test && npm run build
+      - name: Package macOS
+        if: matrix.target == 'macOS-arm64'
+        run: |
+          test "$(uname -m)" = arm64
+          brew install faust
+          node desktop/package.mjs
+          unzip -tq release/public/*-macOS-arm64.zip
+      - name: Package Windows installer and ZIP
+        if: matrix.target == 'Windows-x64'
+        run: |
+          export SG_WINDOWS_NATIVE_RUNTIME="$(cygpath -w "$PWD/build/windows-x64-native")"
+          npm run package:win
+          node desktop/package-installer.mjs
+          version=$(node -p "require('./package.json').version")
+          output="$PWD/release/public/ShallowGroove-v$version-Windows-x64.zip"
+          (cd "release/public/v$version/windows" && 7z a -tzip -mx=5 "$(cygpath -w "$output")" ShallowGroove-win32-x64)
+          unzip -tq "$output"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-${{ matrix.target }}
+          path: |
+            release/public/*.zip
+            release/public/installer/*.exe
+          compression-level: 0
+          if-no-files-found: error

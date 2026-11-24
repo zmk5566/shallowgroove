@@ -24,7 +24,7 @@ execFileSync('tar',['-xzf',resolve(stage,packed[0].filename),'-C',stage]);
 await copyFile(resolve(stage,'package/bin/node.exe'),resolve(runtime,'node.exe'));
 const electronVersion=JSON.parse(await readFile(resolve(root,'node_modules/electron/package.json'),'utf8')).version;
 const service=await prepareConnect(stage,'win32');
-const paths=await packager({dir:app,tmpdir:resolve(stage,'electron-temp'),out:resolve(root,`${outputDirectory}/v${appVersion}/windows`),name:'ShallowGroove',buildVersion:appVersion,icon:resolve(root,'desktop/icons/shallowgroove.ico'),platform:'win32',arch:'x64',electronVersion,asar:false,overwrite:true,prune:false,extraResource:[runtime,service]});
+const paths=await packager({dir:app,tmpdir:resolve(stage,'electron-temp'),out:resolve(root,`${outputDirectory}/v${appVersion}/windows`),name:'ShallowGroove',buildVersion:appVersion.replace(/-pre\.(\d+)$/,'.$1'),icon:resolve(root,'desktop/icons/shallowgroove.ico'),platform:'win32',arch:'x64',electronVersion,asar:false,overwrite:true,prune:false,extraResource:[runtime,service]});
 await rm(stage,{recursive:true,force:true});
 await verifyEdition(resolve(paths[0],'resources/app'));
 await writeFile(resolve(paths[0],'使用说明.txt'),'解压整个文件夹后双击 ShallowGroove.exe。无需安装 Node。\r\n'+(privateBuild?'此版本内置私人 API key，请勿公开分享。':'可在欢迎页或 AI 设置中配置个人 DeepSeek API Key。')+'\r\n');
