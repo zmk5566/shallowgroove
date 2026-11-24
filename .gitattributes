@@ -1,0 +1,4 @@
+# Patch manifests identify DSP sources by their bytewise SHA-256.
+*.dsp text eol=lf
+*.mid binary
+*.midi binary
