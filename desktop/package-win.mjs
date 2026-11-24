@@ -20,7 +20,7 @@ await prepareNative(resolve(runtime,'native'),'win32');
 await trimRuntime(app);
 const version=JSON.parse(await readFile(resolve(root,'node_modules/node/package.json'),'utf8')).version;
 const packed=JSON.parse(npm(['pack',`node-win-x64@${version}`,'--json','--pack-destination',stage],{cwd:stage,encoding:'utf8'}));
-execFileSync('tar',['-xzf',resolve(stage,packed[0].filename),'-C',stage]);
+execFileSync('tar',['-xzf',packed[0].filename],{cwd:stage});
 await copyFile(resolve(stage,'package/bin/node.exe'),resolve(runtime,'node.exe'));
 const electronVersion=JSON.parse(await readFile(resolve(root,'node_modules/electron/package.json'),'utf8')).version;
 const service=await prepareConnect(stage,'win32');
