@@ -94,7 +94,8 @@ if(WIN32)
  install(TARGETS ShallowGrooveEngine RUNTIME_DEPENDENCY_SET EngineDLLs RUNTIME DESTINATION . COMPONENT Engine)
  install(RUNTIME_DEPENDENCY_SET EngineDLLs
   DIRECTORIES "${FAUST_DLL_DIR}"
-  PRE_EXCLUDE_REGEXES "^[Aa][Pp][Ii]-" "^[Ee][Xx][Tt]-"
+  # Windows may reference its optional Application Guard component from system DLLs.
+  PRE_EXCLUDE_REGEXES "^[Aa][Pp][Ii]-" "^[Ee][Xx][Tt]-" "^[Hh]vsi[Ff]ile[Tt]rust[.]dll$"
   POST_EXCLUDE_REGEXES "/[Ss][Yy][Ss][Tt][Ee][Mm]32/"
   RUNTIME DESTINATION . COMPONENT Engine)
 else()
