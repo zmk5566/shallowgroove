@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('shallowgrooveDesktop',Object.freeze({
   setAssistantKey:key=>ipcRenderer.invoke('assistant:key',key),
   assistantStorageIssue:()=>ipcRenderer.invoke('assistant:key-storage'),
  }),
+ libraryList:()=>ipcRenderer.invoke('library:list'),
+ librarySave:(name,patch,previous)=>ipcRenderer.invoke('library:save',name,patch,previous),
  projectList:()=>ipcRenderer.invoke('project:list'),
  projectRead:id=>ipcRenderer.invoke('project:read',id),
  projectSave:(text,name,id)=>ipcRenderer.invoke('project:save',text,name,id),

@@ -8,7 +8,8 @@ import {validateAutomation} from './automation.ts';
 import type {MidiEvent,Project} from './project';
 import type {AudioEngine} from '../audio/engine';
 import type {EffectKind} from '../audio/effects';
-export type Patch={code:string;values:Record<string,number>};
+import type {LibraryRef} from './user-library';
+export type Patch={libraryRef?:LibraryRef;code:string;values:Record<string,number>};
 export type FX=Patch&{id:string;kind:EffectKind;bypassed:boolean};
 export type Session={project:Project;voices:(Patch&{trim:number;basePan:number})[];chains:FX[][];sends:{delay:number;reverb:number}[];buses:{level:number;muted:boolean}[]};
 export type Entry={label:string;source:'user'|'assistant';time:string;before:Session;after:Session};
@@ -30,15 +31,18 @@ export function canCapture(engine:AudioEngine,project:Project|null):boolean{
  return !!(project&&engine.project===project&&rack?.master&&rack.returns.delay&&rack.returns.reverb&&
   engine.voices.length===project.tracks.length&&rack.tracks.length===project.tracks.length);
 }
+function captureLibraryRef(device:{libraryRef?:LibraryRef}){
+ return device.libraryRef?{libraryRef:{...device.libraryRef}}:{};
+}
 export function capture(engine:AudioEngine,project:Project):Session{
  const rack=engine.effects!;const targets=[...project.tracks.map((_,i)=>i),'delay','reverb','master'] as const;
- return {project,voices:engine.voices.map(v=>({code:v.code,values:{...v.values},trim:v.trim,basePan:v.basePan})),chains:targets.map(t=>rack.chain(t).effects.map(d=>({id:d.id,kind:d.kind,code:d.code,values:{...d.values},bypassed:d.bypassed}))),sends:rack.tracks.map(t=>({...t.amounts})),buses:[rack.returns.delay,rack.returns.reverb,rack.master!].map(b=>({level:b.level,muted:b.muted}))};
+ return {project,voices:engine.voices.map(v=>({code:v.code,values:{...v.values},trim:v.trim,basePan:v.basePan,...captureLibraryRef(v)})),chains:targets.map(t=>rack.chain(t).effects.map(d=>({id:d.id,kind:d.kind,code:d.code,values:{...d.values},bypassed:d.bypassed,...captureLibraryRef(d)}))),sends:rack.tracks.map(t=>({...t.amounts})),buses:[rack.returns.delay,rack.returns.reverb,rack.master!].map(b=>({level:b.level,muted:b.muted}))};
 }
 export async function hydrate(engine:AudioEngine,s:Session,activate=true){
  await engine.initialize(structuredClone(s.project),'basic','',activate);
- for(let i=0;i<s.voices.length;i++){const v=s.voices[i];if(engine.voices[i].code!==v.code)await engine.replaceInstrument(i,v.code);engine.voices[i].trim=v.trim;engine.voices[i].basePan=v.basePan;for(const [p,n] of Object.entries(v.values))engine.setParameter(i,p,n);}
+ for(let i=0;i<s.voices.length;i++){const v=s.voices[i];if(engine.voices[i].code!==v.code)await engine.replaceInstrument(i,v.code);if(v.libraryRef)engine.voices[i].libraryRef={...v.libraryRef};else delete engine.voices[i].libraryRef;engine.voices[i].trim=v.trim;engine.voices[i].basePan=v.basePan;for(const [p,n] of Object.entries(v.values))engine.setParameter(i,p,n);}
  const targets=[...s.project.tracks.map((_,i)=>i),'delay','reverb','master'] as const;
- for(let i=0;i<targets.length;i++){const target=targets[i];for(const e of [...engine.effects!.chain(target).effects])await engine.removeEffect(target,e.id);for(const fx of s.chains[i]){const d=await engine.addEffect(target,fx.kind,fx.code);d.id=fx.id;for(const [p,n] of Object.entries(fx.values))engine.effects!.setParameter(d,p,n);engine.effects!.bypass(d,fx.bypassed);}}
+ for(let i=0;i<targets.length;i++){const target=targets[i];for(const e of [...engine.effects!.chain(target).effects])await engine.removeEffect(target,e.id);for(const fx of s.chains[i]){const d=await engine.addEffect(target,fx.kind,fx.code);d.id=fx.id;if(fx.libraryRef)d.libraryRef={...fx.libraryRef};for(const [p,n] of Object.entries(fx.values))engine.effects!.setParameter(d,p,n);engine.effects!.bypass(d,fx.bypassed);}}
  s.sends.forEach((s,i)=>{engine.effects!.setSend(i,'delay',s.delay);engine.effects!.setSend(i,'reverb',s.reverb);});s.buses.forEach((b,i)=>{if(i===2)engine.effects!.setMaster(b.level,b.muted);else engine.effects!.setReturn(i===0?'delay':'reverb',b.level,b.muted);});engine.updateMix(s.project);engine.automationOverrides.clear();
 }
 export function validateSession(value:unknown):asserts value is Session{
@@ -51,7 +55,11 @@ export function validateSession(value:unknown):asserts value is Session{
  validateClips(p);validateScenes(p);
  if(!Array.isArray(s.voices)||s.voices.length!==p.tracks.length||!Array.isArray(s.chains)||s.chains.length!==p.tracks.length+3||!Array.isArray(s.sends)||s.sends.length!==p.tracks.length||!Array.isArray(s.buses)||s.buses.length!==3)fail();
  for(const chain of s.chains)if(!Array.isArray(chain)||chain.length>64)fail();
- for(const patch of [...s.voices,...s.chains.flat()]){if(typeof patch.code!=='string'||patch.code.length>60000||!patch.values||typeof patch.values!=='object'||!Object.values(patch.values).every(n=>finite(n,-1e12,1e12)))fail();}
+ for(const patch of [...s.voices,...s.chains.flat()]){
+  if(!patch)fail();
+  const ref=patch.libraryRef;
+  if(ref!==undefined&&(!ref||typeof ref.id!=='string'||!ref.id.trim()||ref.id.length>200||!Number.isSafeInteger(ref.revision)||ref.revision<1||typeof ref.name!=='string'||!ref.name.trim()||ref.name.length>200))fail();
+  if(typeof patch.code!=='string'||patch.code.length>60000||!patch.values||typeof patch.values!=='object'||!Object.values(patch.values).every(n=>finite(n,-1e12,1e12)))fail();}
  for(const v of s.voices)if(!finite(v.trim,0,10)||!finite(v.basePan,-1,1))fail();
  for(const f of s.chains.flat())if(![...libraryKinds,'custom'].includes(f.kind)||typeof f.id!=='string'||typeof f.bypassed!=='boolean')fail();
  for(const send of s.sends)if(!finite(send.delay,0,1)||!finite(send.reverb,0,1))fail();for(const b of s.buses)if(!finite(b.level,0,1.5)||typeof b.muted!=='boolean')fail();
@@ -73,7 +81,8 @@ export function packFile(session:Session,history?:History,conversation?:unknown[
  let minAppVersion='0.3.12';
  const originalEffects=new Set(['compressor','delay','reverb','custom']);
  const pack=(s:Session)=>{
-  if(s.chains.some(chain=>chain.some(fx=>!originalEffects.has(fx.kind))))minAppVersion='0.4.0';
+  if(s.voices.some(v=>v.libraryRef)||s.chains.some(chain=>chain.some(fx=>fx.libraryRef)))minAppVersion='0.4.1';
+  else if(minAppVersion!=='0.4.1'&&s.chains.some(chain=>chain.some(fx=>!originalEffects.has(fx.kind))))minAppVersion='0.4.0';
   else if(minAppVersion==='0.3.12'&&(s.project.clips?.length||s.project.scenes?.length))minAppVersion='0.3.18';
   return {...s,project:{...s.project,global_events:events(s.project.global_events),tracks:s.project.tracks.map(t=>({...t,events:events(t.events)}))},voices:s.voices.map(v=>({...v,code:source(v.code)})),chains:s.chains.map(c=>c.map(f=>({...f,code:source(f.code)})))};
  };

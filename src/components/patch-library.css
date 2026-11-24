@@ -1,0 +1,15 @@
+.patch-library { display: grid; gap: 10px; }
+.patch-library-search, .patch-library-current-row, .patch-library-current form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.patch-library-search > div, .patch-library-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.patch-library input { min-width: 0; flex: 1 1 10em; background: var(--bg); color: var(--ink); border: 1px solid var(--line); padding: 5px 7px; }
+.patch-library-browser { display: grid; grid-template-columns: minmax(6em, .7fr) minmax(0, 2fr); gap: 8px; }
+.patch-library-categories, .patch-library-results { display: flex; flex-direction: column; align-content: start; overflow-y: auto; gap: 3px; height: clamp(7em, 32vh, 20em); }
+.patch-library-categories button, .patch-library-results button { text-align: left; }
+.patch-library-results button { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.patch-library-results span, .patch-library-current strong { overflow-wrap: anywhere; }
+.patch-library small, .patch-library-results p { color: var(--muted); }
+.patch-library small { white-space: nowrap; font-size: .82em; }
+.patch-library-current { display: grid; gap: 7px; border-top: 1px solid var(--line); padding-top: 9px; }
+.patch-library-current-row { justify-content: space-between; }
+.patch-library-current-row strong, .patch-library-current-row small { margin-inline-start: 4px; }
+.patch-library [role=alert] { color: var(--ink); border-inline-start: 2px solid var(--red); padding-inline-start: 8px; overflow-wrap: anywhere; }

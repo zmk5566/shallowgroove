@@ -38,3 +38,49 @@ test('writer tracks requirements in exported history and reads legacy files with
  assert.throws(()=>parseFile(JSON.stringify({...legacy,minAppVersion:'0.10.0',session:null})),/需要 ShallowGroove 0\.10\.0/);
  assert.deepEqual(parseFile(JSON.stringify({...legacy,savedWith:'0.10.0'})).session,base);
 });
+
+test('project embeds a library revision alongside its independent sound snapshot',()=>{
+ const session=structuredClone(base);
+ const libraryRef={id:crypto.randomUUID(),name:'Tape Echo',revision:1};
+ session.chains[2].push({id:'master-fx',kind:'delay',libraryRef,code:'process=_,_;',values:{'/echo/Time':90},bypassed:false});
+ const revised=structuredClone(session),device=revised.chains[2][0];
+ device.libraryRef!.revision=2;device.values['/echo/Time']=120;
+ const history=new History();history.push(session,revised,'Update from library','user');
+ const packed=packFile(revised,history);
+ assert.equal(packed.minAppVersion,'0.4.1');
+ const restored=parseFile(JSON.stringify(packed));
+ assert.deepEqual(restored.session,revised);
+ assert.deepEqual(restored.history.entries[0].before,session);
+ device.libraryRef!.revision=0;
+ assert.throws(()=>validateSession(revised));
+});
+
+test('hydrate and capture keep patch provenance without consulting a personal library',async()=>{
+ const {capture,hydrate}=await import('../src/model/session.ts');
+ const session=structuredClone(base);
+ session.project.tracks.push({id:'lead',name:'Lead',midi_channel:1,events:[],gain:1,pan:0,mute:false,solo:false});
+ session.voices.push({code:'synth',values:{'/synth/Tone':.3},trim:1,basePan:0,libraryRef:{id:crypto.randomUUID(),name:'Soft lead',revision:2}});
+ session.sends.push({delay:0,reverb:0});
+ session.chains.unshift([{id:'fx',kind:'delay',code:'echo',bypassed:true,values:{'/echo/Time':90},libraryRef:{id:crypto.randomUUID(),name:'Tape',revision:4}}]);
+ const targets=[0,'delay','reverb','master'] as const;
+ const chains=targets.map(()=>({effects:[] as Session['chains'][number]}));
+ const track={amounts:{delay:0,reverb:0}},bus={...session.buses[0]};
+ const voices=[{code:'basic',values:{} as Record<string,number>,trim:1,basePan:0}];
+ const engine={voices,initialize:async()=>{},replaceInstrument:async(i:number,code:string)=>{voices[i].code=code;},
+  setParameter:(i:number,p:string,n:number)=>{voices[i].values[p]=n;},
+  addEffect:async(t:typeof targets[number],kind:'delay',code:string)=>{
+   const fx={id:'fresh',kind,code,bypassed:false,values:{}};chains[targets.indexOf(t)].effects.push(fx);return fx;
+  },
+  effects:{chain:(t:typeof targets[number])=>chains[targets.indexOf(t)],tracks:[track],returns:{delay:{...bus},reverb:{...bus}},master:{...bus},
+   setParameter:(fx:Session['chains'][number][number],p:string,n:number)=>{fx.values[p]=n;},
+   bypass:(fx:Session['chains'][number][number],value:boolean)=>{fx.bypassed=value;},
+   setSend:()=>{},setReturn:()=>{},setMaster:()=>{}},
+  automationOverrides:new Set(),updateMix:()=>{}
+ } as unknown as import('../src/audio/engine.ts').AudioEngine;
+ await hydrate(engine,session,false);
+ const snapshot=capture(engine,session.project);
+ assert.deepEqual(snapshot,session);
+ engine.voices[0].libraryRef!.revision=9;
+ assert.equal(snapshot.voices[0].libraryRef!.revision,2);
+ assert.equal(session.voices[0].libraryRef!.revision,2);
+});

@@ -86,6 +86,8 @@ else{
    if(mode==='open'){const result=await dialog.showOpenDialog(mainWindow,{title:'打开 ShallowGroove 项目文件夹',properties:['openDirectory']});return result.canceled?null:result.filePaths[0];}
    const result=await dialog.showSaveDialog(mainWindow,{title:'创建项目文件夹 / Create project folder',defaultPath:join(app.getPath('documents'),name.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_'))});return result.canceled?null:result.filePath;
   });
+  const patchLibrary=require('./user-library.cjs').createUserLibrary(app.getPath('userData'));
+  for(const action of ['list','save'])ipcMain.handle('library:'+action,(event,...args)=>{if(!trusted(event))throw Error('Untrusted window');return patchLibrary[action](...args);});
   for(const action of ['list','read','save','open','draft','version','clone'])ipcMain.handle('project:'+action,(event,...args)=>{if(!trusted(event))throw Error('Untrusted window');return projectFiles[action](...args);});
   ipcMain.on('project:dirty',(event,dirty)=>{if(trusted(event)){projectReady=true;projectDirty=!!dirty;projectCloseAllowed=false;mainWindow.setDocumentEdited(projectDirty);}});
   ipcMain.on('project:allow-close',event=>{if(trusted(event)){projectCloseAllowed=true;app.quit();}});

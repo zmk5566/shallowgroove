@@ -1,3 +1,4 @@
+import type {LibraryEntry,LibraryPatch,LibraryRef} from './model/user-library';
 import type {ProjectDraft,ProjectRecord} from './model/project-files';
 export type MusicVersions={branch:string;head:string;remote:string;remoteBranches:string[];branches:string[];commits:{graph:string;id:string;parents:string;refs:string;title:string}[]};
 export type VersionCommand={action:'status'|'link'|'fetch'|'init'|'checkpoint'|'preview'|'branch'|'switch'|'pull'|'push'|'remote';name?:string;url?:string;commit?:string;chat?:unknown[]};
@@ -7,6 +8,8 @@ declare global {
    testAssistantKey:()=>Promise<'ok'|'invalid'|'network'|'storage'>;
    setAssistantKey:(key:string|null)=>Promise<'ok'|'invalid'|'network'|'storage'|'busy'>;
    assistantStorageIssue:()=>Promise<boolean>;
+   libraryList:()=>Promise<LibraryEntry[]>;
+   librarySave:(name:string,patch:LibraryPatch,previous?:LibraryRef)=>Promise<LibraryEntry>;
    projectList:()=>Promise<ProjectRecord[]>;
    projectRead:(id:string)=>Promise<{record:ProjectRecord;text:string}>;
    projectSave:(text:string,name:string,id:string|null)=>Promise<ProjectRecord|null>;

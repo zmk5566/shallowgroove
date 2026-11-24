@@ -1,3 +1,5 @@
+import type {LibraryRef} from '../model/user-library';
+import {libraryParameters} from './library-parameters';
 import {findPreset} from '../model/effect-library.ts';
 import eq from '../../patches/effects/eq.dsp?raw';
 import filter from '../../patches/effects/filter.dsp?raw';
@@ -14,7 +16,7 @@ export type ReturnKind='delay'|'reverb';
 export type ChannelTarget=number|ReturnKind|'master';
 export interface EffectChain {input:GainNode;output:GainNode;effects:EffectDevice[]}
 export interface EffectControl {address:string;label:string;min:number;max:number;step:number;init:number}
-export interface EffectDevice {factory:FaustDspFactory;id:string;kind:EffectKind;code:string;node:FaustMonoAudioWorkletNode;input:GainNode;output:GainNode;dry:GainNode;wet:GainNode;controls:EffectControl[];values:Record<string,number>;bypassed:boolean;wetOnly:boolean}
+export interface EffectDevice {libraryRef?:LibraryRef;factory:FaustDspFactory;id:string;kind:EffectKind;code:string;node:FaustMonoAudioWorkletNode;input:GainNode;output:GainNode;dry:GainNode;wet:GainNode;controls:EffectControl[];values:Record<string,number>;bypassed:boolean;wetOnly:boolean}
 export interface TrackRack {input:GainNode;output:GainNode;effects:EffectDevice[];sends:Record<ReturnKind,GainNode>;amounts:Record<ReturnKind,number>}
 interface ReturnBus extends EffectChain {gain:GainNode;analyser:AnalyserNode;level:number;muted:boolean}
 export class EffectsRack {
@@ -47,9 +49,13 @@ export class EffectsRack {
  private async transition(track:EffectChain,change:()=>void){
   const now=this.context.currentTime;track.output.gain.cancelScheduledValues(now);track.output.gain.setValueAtTime(track.output.gain.value,now);track.output.gain.linearRampToValueAtTime(0,now+.008);
   await new Promise(resolve=>setTimeout(resolve,20));
-  if(this.disposed)return;change();this.wire(track);const target=track.output.gain.value;track.output.gain.setValueAtTime(0,this.context.currentTime);track.output.gain.linearRampToValueAtTime(target,this.context.currentTime+.008);
+  if(this.disposed)return;
+  try{change();}finally{
+   this.wire(track);const target=track.output.gain.value;
+   track.output.gain.setValueAtTime(0,this.context.currentTime);track.output.gain.linearRampToValueAtTime(target,this.context.currentTime+.008);
+  }
  }
- async add(index:ChannelTarget,kind:EffectKind,code?:string,presetId?:string){
+ async add(index:ChannelTarget,kind:EffectKind,code?:string,presetId?:string,values?:Record<string,number>){
   const track=this.chain(index),preset=presetId===undefined?undefined:findPreset(kind,presetId);
   const wetOnly=(index==='delay'||index==='reverb')&&['delay','reverb','custom'].includes(kind);
   const effect=await this.create(kind,wetOnly,code);
@@ -59,6 +65,7 @@ export class EffectsRack {
     if(!control)throw Error('Missing preset control: '+label);
     this.setParameter(effect,control.address,value);
    }
+   if(values)this.applyLibraryValues(effect,values);
    await this.transition(track,()=>track.effects.push(effect));
    if(this.disposed)throw Error('Rack disposed');
    return effect;
@@ -66,9 +73,32 @@ export class EffectsRack {
  }
  async move(index:ChannelTarget,id:string,direction:number){const t=this.chain(index),from=t.effects.findIndex(e=>e.id===id),to=from+direction;if(from<0||to<0||to>=t.effects.length)return;await this.transition(t,()=>{const [effect]=t.effects.splice(from,1);t.effects.splice(to,0,effect);});}
  async remove(index:ChannelTarget,id:string){const t=this.chain(index),e=t.effects.find(e=>e.id===id);if(!e)return;await this.transition(t,()=>{this.destroyDevice(e);t.effects=t.effects.filter(x=>x!==e);});}
- async replace(index:ChannelTarget,id:string,code:string){const t=this.chain(index),i=t.effects.findIndex(e=>e.id===id);if(i<0)throw Error('Device not found');const old=t.effects[i],next=await this.create(old.kind,old.wetOnly,code);next.id=old.id;
-  for(const c of next.controls){const before=old.controls.find(x=>x.label===c.label);if(before)this.setParameter(next,c.address,Math.max(c.min,Math.min(c.max,old.values[before.address])));}
-  this.bypass(next,old.bypassed);await this.transition(t,()=>{t.effects[i]=next;old.output.disconnect();});this.destroyDevice(old);return next;
+ async replace(index:ChannelTarget,id:string,code:string,values?:Record<string,number>){
+  const track=this.chain(index),old=track.effects.find(e=>e.id===id);
+  if(!old)throw Error('Device not found');
+  const next=await this.create(old.kind,old.wetOnly,code);
+  try{
+   if(values)this.applyLibraryValues(next,values);
+   else for(const c of next.controls){
+    const before=old.controls.find(x=>x.address===c.address)??old.controls.find(x=>x.label===c.label);
+    if(before)this.setParameter(next,c.address,old.values[before.address]);
+   }
+   this.bypass(next,old.bypassed);
+   await this.transition(track,()=>{
+    const slot=track.effects.indexOf(old);
+    if(slot<0)throw Error('Device changed while compiling');
+    next.id=old.id;next.libraryRef=old.libraryRef;
+    track.effects[slot]=next;old.output.disconnect();
+   });
+   if(this.disposed)throw Error('Rack disposed');
+   this.destroyDevice(old);
+   return next;
+  }catch(error){this.destroyDevice(next);throw error;}
+ }
+ private applyLibraryValues(device:EffectDevice,values:Record<string,number>){
+  for(const [address,value] of Object.entries(libraryParameters(device.controls,values))){
+   this.setParameter(device,address,value);
+  }
  }
  bypass(e:EffectDevice,value:boolean){e.bypassed=value;const now=this.context.currentTime;e.dry.gain.setTargetAtTime(value&&!e.wetOnly?1:0,now,.01);e.wet.gain.setTargetAtTime(value?0:1,now,.01);}
  setParameter(e:EffectDevice,address:string,value:number){const c=e.controls.find(c=>c.address===address);if(!c||!Number.isFinite(value))throw Error('Invalid effect parameter');value=e.wetOnly&&c.label==='Mix'?1:Math.max(c.min,Math.min(c.max,value));this.onParameter?.(e,address);e.values[address]=value;e.node.setParamValue(address,value);}

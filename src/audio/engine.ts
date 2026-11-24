@@ -1,3 +1,5 @@
+import type {LibraryRef,LibraryEntry} from '../model/user-library';
+import {libraryParameters} from './library-parameters';
 import {LiveClips,type Launch} from './live-clips';
 import {barRange,musicalPosition,meterMap} from '../model/meter';
 import {bpmAtTick,retimePosition} from '../model/tempo';
@@ -13,7 +15,7 @@ export {defaultCode};
 import {assignedPatch,type SoundSet} from './patch-bank';
 export interface Control {address:string;label:string;min:number;max:number;step:number;init:number}
 export interface Compiled {voiceFactory:FaustDspFactory;mixerModule:WebAssembly.Module;effectFactory:FaustDspFactory|null}
-interface Voice {compiled:Compiled;code:string;rack:TrackRack;trim:number;basePan:number;node:FaustPolyAudioWorkletNode;output:GainNode;gain:GainNode;pan:StereoPannerNode;analyser:AnalyserNode;values:Record<string,number>}
+interface Voice {libraryRef?:LibraryRef;compiled:Compiled;code:string;rack:TrackRack;trim:number;basePan:number;node:FaustPolyAudioWorkletNode;output:GainNode;gain:GainNode;pan:StereoPannerNode;analyser:AnalyserNode;values:Record<string,number>}
 export class AudioEngine {
  context:AudioContext|null=null; voices:Voice[]=[]; controls:Control[]=[]; playing=false; loop=false; startTime=0; duration=0; project:Project|null=null;
  effects:EffectsRack|null=null; private master:GainNode|null=null; private tempoCursor=0;
@@ -143,14 +145,19 @@ export class AudioEngine {
   return node.getDescriptors().filter(d=>!['freq','gain','gate','key','vel','velocity'].includes(d.address.split('/').at(-1)??''))
    .filter(d=>['hslider','vslider','nentry'].includes(d.type)).map(d=>({address:d.address,label:d.label,min:d.min??0,max:d.max??1,step:d.step??0.01,init:d.init??0}));
  }
- async replaceInstrument(index:number,code:string){
+ async replaceInstrument(index:number,code:string,values?:Record<string,number>){
   if(!this.context||!this.project)throw new Error('Initialize audio first');
-  const previous=this.voices[index],project=this.project;
+  const previous=this.voices[index];
+  if(!previous)throw Error('Instrument not found');
+  const originalNode=previous.node;
   const compiled=await this.compile(code);
   const node=await new FaustPolyDspGenerator().createNode(this.context,16,'ShallowSynth',compiled.voiceFactory,compiled.mixerModule,compiled.effectFactory);
   if(!node)throw Error('Unable to create Faust instrument');
   (node as AudioWorkletNode).onprocessorerror=()=>{this.lastError='Instrument AudioWorklet stopped';this.stop();};
-  if(this.project!==project||this.voices[index]!==previous){node.destroy();throw Error('Project changed while compiling');}
+  if(this.voices[index]!==previous||previous.node!==originalNode){node.destroy();throw Error('Project changed while compiling');}
+  const controls=this.describe(node),applied=libraryParameters(controls,values??{});
+  try{for(const [address,value] of Object.entries(applied))node.setParamValue(address,value);}
+  catch(error){node.destroy();throw error;}
   const now=this.context.currentTime,output=this.context.createGain(),oldNode=previous.node,oldOutput=previous.output;
   output.gain.value=0;node.connect(output).connect(previous.rack.input);
   if(this.playing){
@@ -159,16 +166,40 @@ export class AudioEngine {
    for(const msg of chase.messages)if(msg.trackIndex===index)node.midiMessage(msg.data,now);
    for(const m of this.scheduledMidi)if(m.track===index&&m.when>=now)node.midiMessage(m.data,m.when);
   }
-  previous.compiled=compiled;previous.node=node;previous.output=output;previous.values={};previous.code=code;
+  previous.compiled=compiled;previous.node=node;previous.output=output;previous.values=applied;previous.code=code;
   output.gain.linearRampToValueAtTime(1,now+.02);oldOutput.gain.cancelScheduledValues(now);oldOutput.gain.setValueAtTime(oldOutput.gain.value,now);oldOutput.gain.linearRampToValueAtTime(0,now+.02);
   window.setTimeout(()=>{oldNode.disconnect();oldNode.destroy();oldOutput.disconnect();},60);
-  return this.describe(node);
+  return controls;
  }
  private requireStopped(){if(!this.effects)throw Error('Click Play to initialize audio first');}
- async addEffect(index:ChannelTarget,kind:EffectKind,code?:string,presetId?:string){this.requireStopped();const device=await this.effects!.add(index,kind,code,presetId);const tempo=device.controls.find(c=>c.label==='BPM');if(tempo)device.node.setParamValue(tempo.address,this.bpm,this.context!.currentTime);return device;}
+ async addEffect(index:ChannelTarget,kind:EffectKind,code?:string,presetId?:string,values?:Record<string,number>){this.requireStopped();const device=await this.effects!.add(index,kind,code,presetId,values);const tempo=device.controls.find(c=>c.label==='BPM');if(tempo)device.node.setParamValue(tempo.address,this.bpm,this.context!.currentTime);return device;}
  moveEffect(index:ChannelTarget,id:string,direction:number){this.requireStopped();return this.effects!.move(index,id,direction);}
  removeEffect(index:ChannelTarget,id:string){this.requireStopped();return this.effects!.remove(index,id);}
  async replaceEffect(index:ChannelTarget,id:string,code:string){this.requireStopped();return this.effects!.replace(index,id,code);}
+
+ async loadLibraryPatch(target:ChannelTarget,entry:LibraryEntry,replaceEffectId?:string):Promise<string>{
+  this.requireStopped();
+  const libraryRef={id:entry.id,revision:entry.revision,name:entry.name};
+  if(entry.kind==='instrument'){
+   if(typeof target!=='number'||replaceEffectId)throw Error('Choose an instrument track');
+   await this.replaceInstrument(target,entry.code,entry.values);
+   this.voices[target].libraryRef=libraryRef;
+   return 'instrument';
+  }
+  const rack=this.effects!;
+  if(replaceEffectId){
+   const old=rack.chain(target).effects.find(effect=>effect.id===replaceEffectId);
+   if(!old||old.kind!==entry.kind)throw Error('Choose a matching effect to update');
+   const effect=await rack.replace(target,replaceEffectId,entry.code,entry.values);
+   const tempo=effect.controls.find(c=>c.label==='BPM');
+   if(tempo)effect.node.setParamValue(tempo.address,this.bpm,this.context!.currentTime);
+   effect.libraryRef=libraryRef;
+   return effect.id;
+  }
+  const effect=await this.addEffect(target,entry.kind,entry.code,undefined,entry.values);
+  effect.libraryRef=libraryRef;
+  return effect.id;
+ }
 
  setParameter(index:number,path:string,value:number){if(this.project?.tracks[index])this.overrideAutomation(this.project.tracks[index].id,'instrument',path);const v=this.voices[index];if(v){v.node.setParamValue(path,value);v.values[path]=value;}}
  updateMix(project:Project){const solo=project.tracks.some(t=>t.solo);this.project=project;
