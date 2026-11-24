@@ -61,9 +61,23 @@ jobs:
           npm run package:win
           node desktop/package-installer.mjs
           version=$(node -p "require('./package.json').version")
-          output="$PWD/release/public/ShallowGroove-v$version-Windows-x64.zip"
-          (cd "release/public/v$version/windows" && 7z a -tzip -mx=5 "$(cygpath -w "$output")" ShallowGroove-win32-x64)
-          unzip -tq "$output"
+          python - "$version" <<'PYZIP'
+          import shutil
+          import sys
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          version = sys.argv[1]
+          public = Path("release/public")
+          archive = shutil.make_archive(
+              str(public / f"ShallowGroove-v{version}-Windows-x64"), "zip",
+              root_dir=public / f"v{version}" / "windows", base_dir="ShallowGroove-win32-x64",
+          )
+          with ZipFile(archive) as bundle:
+              bundle.getinfo("ShallowGroove-win32-x64/使用说明.txt")
+              if corrupt := bundle.testzip():
+                  raise ValueError(f"CRC failed for {corrupt}")
+          PYZIP
       - uses: actions/upload-artifact@v4
         with:
           name: public-${{ matrix.target }}
