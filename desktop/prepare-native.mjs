@@ -50,7 +50,10 @@ export async function prepareNative(destination,platform){
   const build=join(root,'build-native');
   run('cmake',['-S',join(root,'native'),'-B',build,'-DCMAKE_BUILD_TYPE=Release']);
   const env={...process.env};
-  if(platform==='win32')env.PATH=[build,...(env.FAUST_ROOT?[join(env.FAUST_ROOT,'lib')]:[]),env.PATH].join(delimiter);
+  if(platform==='win32'){
+   const key=Object.keys(env).find(k=>k.toUpperCase()==='PATH')??'Path';
+   env[key]=[build,...(env.FAUST_ROOT?[join(env.FAUST_ROOT,'lib')]:[]),env[key]].join(delimiter);
+  }
   run('cmake',['--build',build,'--config','Release','--target','ShallowGrooveEngine','ShallowGrooveFX_VST3','ShallowGrooveRack_VST3','--parallel','3'],{env});
   run('cmake',['--install',build,'--config','Release','--component','Engine','--prefix',destination]);
   if(platform==='darwin')await relocateMac(binary);

@@ -28,12 +28,16 @@ jobs:
           7z x $installer "-o$sdk" 'include/*' 'lib/faust.dll' 'lib/faust.lib' 'share/faust/*' -y
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "FAUST_ROOT=$sdk" >> $env:GITHUB_ENV
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
       - name: Build and stage standalone runtime
         run: |
           nuget install Microsoft.Web.WebView2 -Version 1.0.2903.40 -OutputDirectory "$env:RUNNER_TEMP/webview2" -NonInteractive
-          cmake -S native -B build-native -A x64 "-DJUCE_WEBVIEW2_PACKAGE_LOCATION=$env:RUNNER_TEMP/webview2"
+          cmake -S native -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release "-DJUCE_WEBVIEW2_PACKAGE_LOCATION=$env:RUNNER_TEMP/webview2"
           node desktop/prepare-native.mjs build/windows-x64-native
-          cmake --build build-native --config Release --target ShallowGrooveHostCheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-native --config Release --target ShallowGrooveHostCheck --parallel 3
       - name: Check staged runtime
         shell: pwsh
         run: |
