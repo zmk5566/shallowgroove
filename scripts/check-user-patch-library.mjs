@@ -37,7 +37,7 @@ try{
  }
  async function load(p){
   await open(p);
-  await dialog(p).getByRole('button',{name:'User',exact:true}).click();
+  await dialog(p).getByRole('button',{name:'User Library',exact:true}).click();
   await dialog(p).locator('.patch-library-results button').filter({hasText:'Tape echo'}).click();
   await expect(dialog(p)).toHaveCount(0);
  }
@@ -50,6 +50,14 @@ try{
  await dialog(page).getByLabel('Preset name').fill('Tape echo');
  await dialog(page).getByRole('button',{name:'Save',exact:true}).click();
  await expect(dialog(page).locator('.patch-library-current-row')).toContainText('v1');
+ await dialog(page).getByRole('button',{name:'Save as variant'}).click();
+ const naming=page.getByRole('dialog',{name:'Save to User Library',exact:true});
+ await expect(naming.getByLabel('Preset name')).toHaveValue('Stereo Delay');
+ await naming.getByLabel('Preset name').fill('  TAPE ECHO  ');
+ await naming.getByRole('button',{name:'Save',exact:true}).click();
+ await expect(naming.getByRole('button',{name:'Confirm save'})).toBeVisible();
+ await naming.getByRole('button',{name:'Cancel'}).click();
+ await expect(dialog(page).locator('.patch-library-results button')).toHaveCount(1);
  await page.keyboard.press('Escape');
  const firstId=await fx(page).getAttribute('data-effect-id');
  await page.getByLabel('Select channel 2',{exact:true}).click();
@@ -59,6 +67,10 @@ try{
  await setFeedback('0.5');
  await open(page);
  await dialog(page).getByRole('button',{name:'Save new revision'}).click();
+  await expect(dialog(page).getByLabel('Preset name')).toHaveValue('Stereo Delay');
+  await dialog(page).getByLabel('Preset name').fill('Tape echo II');
+  await dialog(page).getByRole('button',{name:'Save',exact:true}).click();
+  await expect(dialog(page).locator('.patch-library-results [aria-current=true]')).toContainText('Tape echo II');
  await expect(dialog(page).locator('.patch-library-current-row')).toContainText('v2');
  await page.keyboard.press('Escape');
  await page.getByLabel('Select channel 1',{exact:true}).click();
@@ -90,7 +102,7 @@ try{
  await other.locator('input[type=file]').setInputFiles({name:'Snapshot.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(doc))});
  await expect(feedback(other)).toHaveValue('0.25',{timeout:30000});
  await open(other);
- await dialog(other).getByRole('button',{name:'User',exact:true}).click();
+ await dialog(other).getByRole('button',{name:'User Library',exact:true}).click();
  await expect(dialog(other)).toContainText('No saved devices yet.');
  assert.deepEqual(errors,[]);
  console.log('PASS independent instances, explicit revision update, ZIP snapshot and cross-project reuse');

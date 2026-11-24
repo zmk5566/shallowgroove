@@ -26,7 +26,7 @@ function Plot({card,zh}:{card:Card;zh:boolean}){
    }
   });
  },[source,mode,zh]);
- if(mode==='performance')return <output ref={result}>{zh?'离线 DSP 测量中…':'Measuring offline DSP…'}</output>;
+ if(mode==='performance')return <output ref={result}>{source.livePerformance?(zh?'测量实时 DSP…':'Measuring live DSP…'):(zh?'离线 DSP 测量中…':'Measuring offline DSP…')}</output>;
  const axis=mode==='wave'?`0–${(1024/source.rate*1000).toFixed(1)} ms`:`20 Hz–${(source.rate/2000).toFixed(1)} kHz`;
  return <><canvas ref={canvas} role="img" aria-label={labels[mode][+zh]}/><small>{mode==='spectrogram'?'8 s → · ':source.effect?(zh?'虚线输入 · 实线输出 · ':'In ┄ Out ━ · '):''}{axis}</small></>;
 }

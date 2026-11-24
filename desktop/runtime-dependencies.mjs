@@ -2,7 +2,7 @@ import {readFile,readdir,stat,rm} from 'node:fs/promises';
 import {resolve,dirname,join,sep} from 'node:path';
 
 const SDK_VERSION='0.2.2-rc.1';
-const roots=['@deepseek-ai/dsh-sdk-client','@deepseek-ai/dsh-sdk-minimal','@deepseek-ai/dsh-tools','@deepseek-ai/dsh-web','@deepseek-ai/dsh-web-search-deepseek','@deepseek-ai/dsh-tool-web','ws'];
+const roots=['@grame/faustwasm','@deepseek-ai/dsh-sdk-client','@deepseek-ai/dsh-sdk-minimal','@deepseek-ai/dsh-tools','@deepseek-ai/dsh-web','@deepseek-ai/dsh-web-search-deepseek','@deepseek-ai/dsh-tool-web','ws'];
 const narrowed=new Set(['@deepseek-ai/dsh','@deepseek-ai/dsh-sdk-app']);
 const packageName=value=>value.startsWith('@')?value.split('/').slice(0,2).join('/'):value.split('/')[0];
 

@@ -1,5 +1,6 @@
+import {randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
-import {readFile} from 'node:fs/promises';
+import {readFile,writeFile,rename} from 'node:fs/promises';
 import {resolve,extname,sep} from 'node:path';
 import {assistantPlugin} from '../server/assistant.mjs';
 import {hexblocksPlugin} from '../server/hexblocks.mjs';
@@ -8,6 +9,7 @@ const dev=process.argv.includes('--vite-dev');
 let config={};
 try{if(!dev)config=JSON.parse(await readFile(resolve(root,'desktop/private-config.json'),'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
 const env={...process.env,...config,DEEPSEEK_API_KEY:config.DEEPSEEK_API_KEY||'',DEEPSEEK_BASE_URL:config.DEEPSEEK_BASE_URL||'',SG_KEY_SOURCE:config.DEEPSEEK_API_KEY?'builtin':'none',SG_KEY_REVISION:0};
+env.SG_PANEL_ID=randomUUID();
 const middleware=[];
 const types={'.html':'text/html','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.json':'application/json','.wasm':'application/wasm','.svg':'image/svg+xml','.png':'image/png'};
 const server=createServer((req,res)=>{
@@ -36,7 +38,15 @@ server.on('error',error=>{
  if(error.code==='EADDRINUSE'&&!fallback){fallback=true;server.listen(0,'127.0.0.1');}
  else{console.error(error);process.exit(1);}
 });
-server.once('listening',()=>process.send?.({port:server.address().port}));
+server.once('listening',async()=>{
+ const port=server.address().port;
+ if(env.SHALLOWGROOVE_DATA_DIR){
+  const file=resolve(env.SHALLOWGROOVE_DATA_DIR,'assistant-panel.json'),tmp=file+'.'+process.pid;
+  await writeFile(tmp,JSON.stringify({port,identity:env.SG_PANEL_ID}),{mode:0o600});
+  await rename(tmp,file);
+ }
+ process.send?.({port});
+});
 server.listen(dev?0:5198,'127.0.0.1');
 let closing=false;
 async function shutdown(){if(closing)return;closing=true;await vite?.close();await Promise.allSettled(plugins.map(p=>p.closeBundle?.()));server.close();setTimeout(()=>process.exit(),500).unref();}

@@ -28,7 +28,7 @@ test('credential storage delegates to OS encryption and survives restart, replac
 test('public and private builds use separate fresh staging directories and include only intended credentials',async t=>{
  const root=await mkdtemp(join(tmpdir(),'sg-edition-'));t.after(()=>rm(root,{recursive:true,force:true}));
  for(const file of ['package.json','package-lock.json','LICENSE','LICENSE-EXAMPLES','NOTICE.md'])await writeFile(join(root,file),'{}');
- for(const dir of ['desktop','server','src','dist'])await mkdir(join(root,dir));
+ for(const dir of ['desktop','server','src','dist','patches/effects'])await mkdir(join(root,dir),{recursive:true});
  const publicStage=()=>stageApplication(root,'mac',false);
  await verifyEdition(join(await publicStage(),'app'),false);
  const file='desktop/private-config.json';

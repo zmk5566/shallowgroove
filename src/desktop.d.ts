@@ -4,10 +4,15 @@ export type MusicVersions={branch:string;head:string;remote:string;remoteBranche
 export type VersionCommand={action:'status'|'link'|'fetch'|'init'|'checkpoint'|'preview'|'branch'|'switch'|'pull'|'push'|'remote';name?:string;url?:string;commit?:string;chat?:unknown[]};
 declare global {
  interface Window {
+  sgNativeAudio?: import("./audio/native-preview").NativeBridge;
   shallowgrooveDesktop?: {
    testAssistantKey:()=>Promise<'ok'|'invalid'|'network'|'storage'>;
    setAssistantKey:(key:string|null)=>Promise<'ok'|'invalid'|'network'|'storage'|'busy'>;
    assistantStorageIssue:()=>Promise<boolean>;
+   exportAudio:(options:{name:string;sampleRate:number;bitDepth:number;engine:'native'|'web';graph:ReturnType<typeof import('./audio/native-preview').nativeGraph>;sequence:ReturnType<typeof import('./audio/native-preview').nativeSequence>})=>Promise<string|null>;
+   cancelAudioExport:()=>Promise<void>;
+   setAudioExportAvailable:(yes:boolean)=>void;
+   onAudioExportProgress:(fn:(percent:number)=>void)=>()=>void;
    libraryList:()=>Promise<LibraryEntry[]>;
    librarySave:(name:string,patch:LibraryPatch,previous?:LibraryRef)=>Promise<LibraryEntry>;
    projectList:()=>Promise<ProjectRecord[]>;
@@ -24,6 +29,7 @@ declare global {
    closeInspector:(id:string)=>void;
    onInspectorClosed:(callback:(id:string)=>void)=>()=>void;
    openSource:(href:string)=>Promise<void>;
+   initialLocale?:'zh-CN'|'en'|null;
    openConnect:(locale:'zh-CN'|'en')=>Promise<boolean>;
    setConnectLocale:(locale:'zh-CN'|'en')=>Promise<boolean>;
    connectStatus:()=>Promise<{phase:'starting'|'running'|'error';message:string}>;

@@ -91,3 +91,28 @@ test('mixer inspection samples only the selected output and offers no device ben
   }finally{popup.close();bus.close();}
  }
 });
+
+test('native sidebar modes share one capture and release the native tap on final close',async()=>{
+ const {registerInspector}=await import('../src/audio/inspect.ts');
+ const request=Promise.withResolvers<import('../src/audio/inspect.ts').InspectRequest>();
+ const detach=registerInspector(request.resolve);
+ const commands:Record<string,unknown>[]=[];
+ const effect={id:'fx'};
+ const native={details:{sampleRate:96000},probeRequest:async(cmd:Record<string,unknown>)=>{
+  commands.push(cmd);return {wave:['Ag==','Aw=='],spectrum:['BA==','BQ=='],seconds:.5,average:.3,peak:.4};
+ }};
+ const engine={native,effects:{devices:()=>[effect]},context:{sampleRate:48000},voices:[]};
+ try{
+  inspectDevice(engine as unknown as AudioEngine,'delay',effect as EffectDevice,'Tape',false);
+  const source=await request.promise;
+  assert.equal(source.livePerformance,true);assert.equal(source.rate,96000);assert.equal(commands.length,0);
+  const modes=['wave','spectrum','spectrogram','performance'] as const;
+  const frames=modes.map(()=>Promise.withResolvers<import('../src/audio/inspect.ts').InspectFrame>());
+  const close=modes.map((mode,i)=>source.subscribe(mode,frames[i].resolve));
+  const data=await Promise.all(frames.map(p=>p.promise));
+  assert.equal(commands.length,1);assert.equal(commands[0].device,'fx');assert.equal(commands[0].track,'delay');
+  assert.deepEqual(data[2].lines,[Uint8Array.of(5)]);assert.equal(data[3].average,.3);
+  close.slice(0,3).forEach(fn=>fn());assert.equal(commands.length,1);
+  close[3]();assert.equal(commands[1].op,'inspectClose');assert.equal(commands[1].token,commands[0].token);
+ }finally{detach();}
+});

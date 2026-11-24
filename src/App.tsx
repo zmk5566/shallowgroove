@@ -1,3 +1,6 @@
+import {nativeGraph,nativeSequence} from './audio/native-preview';
+import {ExportSettings,type ExportFormat} from './components/ExportSettings';
+import {AudioEngineSettings} from './components/AudioEngineSettings';
 import {factoryEntries} from './audio/factory-library';
 import {searchEffects,resolveEffect} from './assistant/effect-catalog';
 import {listUserPatches,type LibraryEntry} from './model/user-library';
@@ -87,14 +90,16 @@ export default function App(){
  const transportRequest=useRef(0);
  const [showInfo,setShowInfo]=useState(false);const [,refreshMixer]=useState(0);
  const [soundSet,setSoundSet]=useState<SoundSet>('period');
- const [locale,setLocale]=useState<Locale>(()=>{try{return localStorage.getItem('shallowgroove.locale')==='en'?'en':'zh-CN';}catch{return 'zh-CN';}});
+ const [locale,setLocale]=useState<Locale>(()=>{const desktop=window.shallowgrooveDesktop?.initialLocale;if(desktop)return desktop;try{return localStorage.getItem('shallowgroove.locale')==='en'?'en':'zh-CN';}catch{return 'zh-CN';}});
  const [descriptions,setDescriptions]=useState<DescriptionFile|null>(null);
  useEffect(()=>{void window.shallowgrooveDesktop?.setConnectLocale(locale).catch(error=>console.error('Connect language sync failed',error));},[locale]);
  useEffect(()=>{document.documentElement.lang=locale;try{localStorage.setItem('shallowgroove.locale',locale);}catch{}},[locale]);
  const engine=useRef(new AudioEngine());
  const readTransportPosition=useCallback(()=>engine.current.position,[]);
  const [slug,setSlug]=useState(''),[project,setProject]=useState<Project|null>(null),[selected,setSelected]=useState<ChannelTarget>(0);
- const [ready,setReady]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[playing,setPlaying]=useState(false),[loop,setLoop]=useState(false);
+ const [ready,setReady]=useState(false),[editorBusy,setBusy]=useState(false),[error,setError]=useState(''),[playing,setPlaying]=useState(false),[loop,setLoop]=useState(false);
+ const busy=editorBusy||!!engine.current.native?.outputPending;
+ const nativeNotice=useRef('');
  const [audioState,setAudioState]=useState('not initialized');
  const [position,setPosition]=useState(0),[levels,setLevels]=useState<StereoLevel[]>([]),[controls,setControls]=useState<Record<number,Control[]>>({}),[values,setValues]=useState<Record<number,Record<string,number>>>({}),[codes,setCodes]=useState<Record<number,string>>({});
  const hexblocks=useHexblocks(async command=>{if(assistantTurn.current||busy)throw Error('Project is busy');const channel=resolveChannelTarget(selected,command.channel,project?.tracks.map(t=>t.id)??[]);return musicCommand({channel,device:command.device??(channel===selected?selectedDevice:'channel')},command,generation.current);});
@@ -147,7 +152,12 @@ export default function App(){
   return {...editorState.current,codeDrafts:Object.fromEntries(Object.entries(editorState.current.codeDrafts).filter(([id])=>ids.has(id))),effectDrafts:Object.fromEntries(Object.entries(editorState.current.effectDrafts??{}).filter(([id])=>session.chains.some(chain=>chain.some(fx=>fx.id===id))))};
  }
  async function installProject(replacement:AudioEngine,metadata:EditorState,description:DescriptionFile|null){
-  take.current=null;armIntent.current=false;waitingForInput.current=false;setRecordArmed(false);setRecordNotice(null);setRecording(false);setArmed(null);latchedInputs.current.clear();replacement.setMetronome(click);versionSource.current=undefined;setZipHint(false);setIncludeChat(false);setSharedChat([]);const previous=engine.current;previous.pause();engine.current=replacement;editorState.current=structuredClone(metadata);
+  take.current=null;armIntent.current=false;waitingForInput.current=false;setRecordArmed(false);setRecordNotice(null);setRecording(false);setArmed(null);latchedInputs.current.clear();replacement.setMetronome(click);versionSource.current=undefined;setZipHint(false);setIncludeChat(false);setSharedChat([]);const previous=engine.current;previous.pause();
+  if(previous.native)await previous.selectNative(false,false);
+  try{
+   if((await window.sgNativeAudio?.preferences())?.engine==='native')await replacement.selectNative(true);nativeNotice.current='';
+  }catch(error){replacement.nativeIssue=String(error);if(nativeNotice.current!==replacement.nativeIssue)replacement.lastError='此工程使用 Web Audio / Using Web Audio for this project: '+replacement.nativeIssue;nativeNotice.current=replacement.nativeIssue;}
+  engine.current=replacement;editorState.current=structuredClone(metadata);
   editorState.current.conversationProject??=metadata.exampleId?'example:'+metadata.exampleId:'track:'+(replacement.project?.tracks[0]?.id??crypto.randomUUID());
   setProject(replacement.project!);setReady(true);setSelected(replacement.project!.tracks.length?0:'master');setSelectedDevice('channel');setSlug(metadata.exampleId??'');setSoundSet(metadata.soundSet);setDescriptions(description);
   setCodes(Object.fromEntries(replacement.voices.map((v,i)=>[i,metadata.codeDrafts[replacement.project!.tracks[i].id]??v.code])));
@@ -184,7 +194,25 @@ export default function App(){
   void library.manager.scan({project:reference,settings:JSON.stringify([rack,editorState.current]),fingerprint:()=>JSON.stringify({session,editor:snapshotEditor(session)})}).catch(e=>setError(String(e)));
  });
  useEffect(()=>{const timer=setInterval(()=>scanProjects(),700);return()=>clearInterval(timer);},[]);
- const fileAction=useEffectEvent((action:string)=>{if(versionsOpen)return;projectAction(async()=>{if(action==='save')await library.manager.save();else if(action==='save-as')await library.manager.save(true);else if(action==='home')await library.manager.goHome();else if(action==='close'&&await library.manager.requestClose())window.shallowgrooveDesktop?.projectAllowClose();});});
+ const exporting=useRef(false);
+ const [exportSettingsOpen,setExportSettingsOpen]=useState(false);
+ const [exportPercent,setExportPercent]=useState<number|null>(null);
+ const [exportCancelling,setExportCancelling]=useState(false);
+ const canExportAudio=!!project&&ready&&!library.state.home&&!library.state.busy&&!busy&&!assistantWorking&&exportPercent===null;
+ useEffect(()=>{window.shallowgrooveDesktop?.setAudioExportAvailable(canExportAudio);},[canExportAudio]);
+ useEffect(()=>window.shallowgrooveDesktop?.onAudioExportProgress(setExportPercent),[]);
+ async function exportAudio(format:ExportFormat){
+  const api=window.shallowgrooveDesktop,e=engine.current;
+  if(!api||!canExportAudio||exporting.current||!e.project)return;
+  exporting.current=true;
+  try{
+   setExportPercent(0);setExportCancelling(false);
+   const path=await api.exportAudio({...format,name:library.state.name||e.project.title,engine:e.native?'native':'web',graph:nativeGraph(e),sequence:nativeSequence(e)});
+   if(path)setRecordNotice({text:(locale==='zh-CN'?'已导出音频 · ':'Audio exported · ')+path.split(/[\\/]/).pop()});
+  }catch(error){setError((locale==='zh-CN'?'音频导出失败 · ':'Audio export failed · ')+String(error));}
+  finally{exporting.current=false;setExportPercent(null);setExportCancelling(false);}
+ }
+ const fileAction=useEffectEvent((action:string)=>{if(action==='export-audio'){if(canExportAudio)setExportSettingsOpen(true);return;}if(versionsOpen)return;projectAction(async()=>{if(action==='save')await library.manager.save();else if(action==='save-as')await library.manager.save(true);else if(action==='home')await library.manager.goHome();else if(action==='close'&&await library.manager.requestClose())window.shallowgrooveDesktop?.projectAllowClose();});});
  useEffect(()=>{
   const onKey=(e:KeyboardEvent)=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'&&!e.altKey&&!e.isComposing){e.preventDefault();if(!e.repeat)fileAction(e.shiftKey?'save-as':'save');}};
   const onUnload=(e:BeforeUnloadEvent)=>{if(library.manager.isDirty()||library.manager.state.busy){e.preventDefault();e.returnValue='';}};
@@ -203,10 +231,14 @@ export default function App(){
  useEffect(()=>{const messages=(e:Event)=>{transcript.current=(e as CustomEvent<unknown[]>).detail;};window.addEventListener('shallowgroove-transcript',messages);const timer=setInterval(()=>pollHistory(),700);const down=()=>{gesture.current=true;};const up=()=>{gesture.current=false;setTimeout(()=>pollHistory(),0);};const start=()=>{pollHistory();assistantTurn.current=true;setAssistantWorking(true);origin.current='assistant';};const end=()=>{assistantTurn.current=false;setAssistantWorking(false);origin.current='assistant';};window.addEventListener('pointerdown',down);window.addEventListener('pointerup',up);window.addEventListener('pointercancel',up);window.addEventListener('blur',up);window.addEventListener('shallowgroove-turn-start',start);window.addEventListener('shallowgroove-turn-end',end);return()=>{window.removeEventListener('shallowgroove-transcript',messages);clearInterval(timer);window.removeEventListener('pointerdown',down);window.removeEventListener('pointerup',up);window.removeEventListener('pointercancel',up);window.removeEventListener('blur',up);window.removeEventListener('shallowgroove-turn-start',start);window.removeEventListener('shallowgroove-turn-end',end);};},[]);
  async function restore(next:Session,selection:ChannelTarget='master',preserveTick=false){
   const replacement=new AudioEngine(),old=engine.current;historyLock.current=true;setBusy(true);setError('');
-  try{await hydrate(replacement,next);replacement.configureLoop(old.loop,old.loopRange);replacement.seek(preserveTick&&old.project?retimePosition(old.timingProject??old.project,next.project,old.position):old.position);if(old.playing){
+  try{
+   const wasNative=!!old.native,wasPlaying=old.playing,oldPos=old.position;
+   await hydrate(replacement,next,!wasNative);
+   if(wasNative){old.pause();await old.selectNative(false,false);try{await replacement.selectNative(true);}catch(error){replacement.lastError='已切回 Web Audio / Switched to Web Audio: '+String(error);}}
+   replacement.configureLoop(old.loop,old.loopRange);replacement.seek(preserveTick&&old.project?retimePosition(old.timingProject??old.project,next.project,oldPos):oldPos);if(wasPlaying&&(!wasNative||replacement.native)){
    const slots=old.currentLaunches().flatMap(s=>{
     const track=next.project.tracks.findIndex(t=>t.id===old.project?.tracks[s.track]?.id);
-    return track>=0?[{track,launch:s.launch}]:[];
+    return track>=0?[{...s,track}]:[];
    });
    await replacement.play({resume:true,slots});
   }old.pause();replacement.setMetronome(click);engine.current=replacement;setProject(replacement.project!);setReady(true);setSelected(selection);setSelectedDevice('channel');setCodes(Object.fromEntries(replacement.voices.map((v,i)=>[i,editorState.current.codeDrafts[replacement.project!.tracks[i].id]??v.code])));setControls(Object.fromEntries(replacement.voices.map((v,i)=>[i,replacement.describe(v.node)])));setValues(Object.fromEntries(replacement.voices.map((v,i)=>[i,{...v.values}])));baseline.current=capture(replacement,replacement.project!);await old.dispose();}
@@ -258,7 +290,7 @@ export default function App(){
   }track.user_named=true;track.id=crypto.randomUUID();track.name=name?.trim()||(duplicate?track.name+' copy':'New track');target=next.project.tracks.length;next.project.tracks.push(track);next.voices.push(duplicate?structuredClone(next.voices[index!]):{code:defaultCode,values:{},trim:1,basePan:0});next.chains.splice(target,0,duplicate?next.chains[index!].map(f=>({...structuredClone(f),id:crypto.randomUUID()})):[]);next.sends.push(duplicate?{...next.sends[index!]}:{delay:0,reverb:0});if(duplicate){const original=before.project.tracks[index!].id;next.project.automation=[...(next.project.automation??[]),...(before.project.automation??[]).filter(l=>l.trackId===original).map(l=>({...structuredClone(l),id:crypto.randomUUID(),trackId:track.id,device:['instrument','mixer'].includes(l.device)?l.device:next.chains[target as number].find((_,i)=>before.chains[index!][i].id===l.device)?.id??l.device}))];}}
   await restore(next,target);history.current.push(before,next,`${({add_track:'添加轨道 / Add track',delete_track:'删除轨道 / Delete track',duplicate_track:'复制轨道 / Duplicate track',rename_track:'重命名 / Rename'} as Record<string,string>)[action]} · ${name??before.project.tracks[index??-1]?.name??'New track'}`,source);baseline.current=capture(engine.current,engine.current.project!);renderHistory(n=>n+1);return {selection:{channel:target,device:'channel'},trackCount:next.project.tracks.length};
  }
- function commitMappings(mappings:HardwareMapping[]){if(!project||busy)throw Error('Project is busy');validateMappings(mappings);const next={...project,hardwareMappings:mappings};setProject(next);engine.current.project=next;}
+ function commitMappings(mappings:HardwareMapping[]){if(!project||busy)throw Error('Project is busy');validateMappings(mappings);const next={...project,hardwareMappings:mappings};engine.current.validateNativeProject(next);setProject(next);engine.current.project=next;}
  function removeMapping(id:string){if(!project?.hardwareMappings?.some(m=>m.id===id))throw Error('Mapping no longer exists');commitMappings(project.hardwareMappings.filter(m=>m.id!==id));}
  function targetForMapping(m:HardwareMapping){if(!ready)return false;const target=engine.current.automationTarget(m as unknown as AutomationLane);return !!target&&(!!target.param||isTempoTarget(m))&&m.outputMin>=target.control.min&&m.outputMax<=target.control.max;}
  function mapHardware(draft:MappingDraft,channel:ChannelTarget=selected,id?:string){
@@ -276,6 +308,7 @@ export default function App(){
  useEffect(()=>{if(!recordNotice)return;const timer=setTimeout(()=>setRecordNotice(null),3200);return()=>clearTimeout(timer);},[recordNotice]);
  const [countBars,setCountBars]=useState(()=>{try{const n=Number(localStorage.getItem('shallowgroove.countInBars'));return [1,2,4].includes(n)?n:0;}catch{return 0;}});
  const [countLabel,setCountLabel]=useState(''),countRequest=useRef<AbortController|null>(null);
+ const [audioSettingsOpen,setAudioSettingsOpen]=useState(false);
  const midiDialog=useRef<HTMLDialogElement>(null),[midiIssue,setMidiIssue]=useState(''),[midiLoading,setMidiLoading]=useState(false);
  function cancelCount(){countRequest.current?.abort();countRequest.current=null;setCountLabel('');}
  useEffect(()=>()=>countRequest.current?.abort(),[]);
@@ -305,21 +338,34 @@ export default function App(){
  }
  function silenceInput(){
   const e=engine.current,i=e.project?.tracks.findIndex(t=>t.id===armed)??-1;
-  if(i>=0){e.monitorMidi(i,[176+e.project!.tracks[i].midi_channel-1,64,0]);e.voices[i]?.node.allNotesOff(true);}
+  if(i>=0){e.monitorMidi(i,[176+e.project!.tracks[i].midi_channel-1,64,0]);if(e.native)e.monitorMidi(i,[176+e.project!.tracks[i].midi_channel-1,123,0]);else e.voices[i]?.node.allNotesOff(true);}
  }
- const midi=useMidiKeyboard(data=>{
+ useEffect(()=>{
+  engine.current.setMonitorTrack(engine.current.project?.tracks.findIndex(t=>t.id===armed)??-1);
+ },[armed,project,engine.current]);
+ const handleInput=useEffectEvent((data:number[],nativePosition?:number,nativeTrack?:number)=>{
+  if(engine.current.native&&nativePosition===undefined)return;
   const e=engine.current,i=e.project?.tracks.findIndex(t=>t.id===armed)??-1;
-  if(i<0||busy||library.manager.state.home||library.manager.state.busy||!ready||data.length!==3||![8,9,11,14].includes(data[0]>>4))return;
+  if(i<0||(nativeTrack!==undefined&&nativeTrack!==i)||busy||library.manager.state.home||library.manager.state.busy||!ready||data.length!==3||![8,9,11,14].includes(data[0]>>4))return;
   if(waitingForInput.current&&e.playing)beginTake();
-  const track=e.project!.tracks[i],tick=recordingTick();
-  e.monitorMidi(i,[(data[0]&240)+track.midi_channel-1,...data.slice(1)]);
+  const track=e.project!.tracks[i];
+  let tick=recordingTick();
+  if(tick!==null&&nativePosition!==undefined&&Number.isFinite(nativePosition))tick=Math.round(secondsToTick(e.timingProject??e.project!,nativePosition));
+  if(nativePosition===undefined)e.monitorMidi(i,[(data[0]&240)+track.midi_channel-1,...data.slice(1)]);
   if(tick!==null&&take.current){if(take.current.canAppend(track))take.current.midi(track,data,tick);
    else{finishTake(tick);notifyRecording('轨道 MIDI 事件已满，录制已结束 / Track MIDI capacity reached. Take saved.');}}
- },()=>{finishTake();silenceInput();},notifyRecording);
+ });
+ const midi=useMidiKeyboard(data=>handleInput(data),()=>{if(!engine.current.native){finishTake();silenceInput();}},notifyRecording);
+ useEffect(()=>{
+  const e=engine.current;
+  e.onNativeOutputPause=()=>{cancelCount();finishTake();transportRequest.current++;};
+  e.onNativeMidi=(data,position,track)=>handleInput(data,position,track);e.onNativeDevices=()=>refreshMixer(n=>n+1);
+  return ()=>{e.onNativeMidi=undefined;e.onNativeDevices=undefined;e.onNativeOutputPause=undefined;};
+ },[engine.current]);
  async function armTrack(id:string){
   if(take.current)return;silenceInput();
   if(armed===id){setArmed(null);return;}
-  try{await midi.connect();await engine.current.resumeAudio();setArmed(id);}catch(error){notifyRecording(String(error));}
+  try{if(!engine.current.native)await midi.connect();await engine.current.resumeAudio();setArmed(id);}catch(error){notifyRecording(String(error));}
  }
  function beginTake(){
   if(!armIntent.current||take.current||!engine.current.playing)return;
@@ -328,7 +374,7 @@ export default function App(){
  function missingInput(){
   if(project?.hardwareMappings?.some(m=>m.enabled))return '';
   if(!project?.tracks.some(t=>t.id===armed))return locale==='zh-CN'?'请点轨道上的 ● 选择 MIDI 录制轨，或启用 HexBlocks 参数绑定。':'Arm a MIDI track or enable a HexBlocks mapping.';
-  return midi.devices.some(d=>midi.enabled(d.id))?'':locale==='zh-CN'?'请连接键盘并启用 MIDI 输入。':'Connect and enable a MIDI input.';
+  return (engine.current.native?engine.current.native.details.midiInputs.some(d=>d.enabled):midi.devices.some(d=>midi.enabled(d.id)))?'':locale==='zh-CN'?'请连接键盘并启用 MIDI 输入。':'Connect and enable a MIDI input.';
  }
  function startArmedTake(){
   if(!armIntent.current||workspaceView!=='arrangement'||!engine.current.playing||take.current)return;
@@ -373,7 +419,8 @@ export default function App(){
  function menuAction(action:string){trackDialog.current?.close();if(menuTrack!==null)void trackAction(action,menuTrack,action==='rename_track'?rename:undefined).catch(e=>setError(String(e)));}
  useEffect(()=>{if(typeof selected==='number'){document.querySelector(`[data-track="${selected}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});document.querySelector(`[data-channel="${selected}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});}},[selected,project?.tracks.length]);
 
- useEffect(()=>{const release=retainEngine(engine);const timer=window.setInterval(()=>{const e=engine.current;setPlaying(e.playing);setPosition(e.position);setAudioState(e.context?.state??'not initialized');if(e.lastError){setError(e.lastError);e.lastError='';}const next=e.voices.map(v=>stereoLevel(v.pan));setLevels(old=>old.length===next.length&&next.every(([l,r],i)=>l===old[i][0]&&r===old[i][1])?old:next);},80);return()=>{clearInterval(timer);release();};},[]);
+ const visibleMeters=useEffectEvent(()=>!library.manager.state.home && (!collapsed.mixer || (!collapsed.overview && workspaceView==='arrangement')));
+ useEffect(()=>{const release=retainEngine(engine);const timer=window.setInterval(()=>{const e=engine.current;setPlaying(e.playing);setPosition(e.position);setAudioState(e.native?'Native':e.context?.state??'not initialized');if(e.lastError){setError(e.lastError);e.lastError='';}if(e.native && visibleMeters())e.native.meters.poll();const next=e.native?e.native.meters.levels:e.voices.map(v=>stereoLevel(v.pan));setLevels(old=>old.length===next.length&&next.every(([l,r],i)=>l===old[i][0]&&r===old[i][1])?old:next);},80);return()=>{clearInterval(timer);release();};},[]);
  async function initializeAudio(source:Project|null=project,activate=true,preset:SoundSet=soundSet){
   if(!source)throw Error('No project loaded');
   setBusy(true);setError('');
@@ -398,8 +445,9 @@ export default function App(){
   if(!withCount||!countBars){await e.play({slots});startArmedTake();return;}
   const request=new AbortController();countRequest.current=request;setCountLabel('…');
   try{
-   await e.countIn(countBars,request.signal,setCountLabel);
-   if(!request.signal.aborted&&engine.current===e){await e.play({lead:0,slots});startArmedTake();}
+   const native=!!e.native,launch=()=>e.play({lead:0,slots});
+   await e.countIn(countBars,request.signal,setCountLabel,native?launch:undefined);
+   if(!request.signal.aborted&&engine.current===e){if(!native)await launch();if(e.playing)startArmedTake();}
   }finally{if(countRequest.current===request){countRequest.current=null;setCountLabel('');}}
  }
  async function play(){
@@ -426,7 +474,7 @@ export default function App(){
   return()=>window.removeEventListener('keydown',keydown);
  },[]);
  function change(index:number,patch:Partial<Track>){if(!project)return;selectChannel(index);for(const key of ['gain','pan'] as const)if(patch[key]!==undefined)engine.current.overrideAutomation(project.tracks[index].id,'mixer',key);const next={...project,tracks:project.tracks.map((t,i)=>i===index?{...t,...patch}:t)};setProject(next);if(ready)engine.current.updateMix(next);}
- async function compile(){if(typeof selected!=='number')return;setBusy(true);setError('');try{const descriptors=await engine.current.replaceInstrument(selected,codes[selected]??assignedPatch(slug,project!.tracks[selected].id,soundSet).code);delete editorState.current.codeDrafts[project!.tracks[selected].id];setControls(s=>({...s,[selected]:descriptors}));setValues(s=>({...s,[selected]:{}}));}catch(e){setError(String(e));}finally{setBusy(false);}}
+ async function compile(){if(typeof selected!=='number')return;setBusy(true);setError('');try{const descriptors=await engine.current.replaceInstrument(selected,codes[selected]??assignedPatch(slug,project!.tracks[selected].id,soundSet).code);delete editorState.current.codeDrafts[project!.tracks[selected].id];setControls(s=>({...s,[selected]:descriptors}));setValues(s=>({...s,[selected]:{...engine.current.voices[selected].values}}));}catch(e){setError(String(e));}finally{setBusy(false);}}
  async function applyLibraryPatch(entry:LibraryEntry,replaceId?:string){
   if(busy||operationBusy.current||assistantTurn.current||historyLock.current)throw Error(locale==='zh-CN'?'工程正忙':'Project is busy');
   checkpoint();
@@ -506,7 +554,7 @@ export default function App(){
    const result=action.kind==='copyBars'?{project:copyBars(project,index,action.start,action.end,action.destination),ref:undefined}:applyClip(project,index,action);
    validateClips(result.project);
    const next={...before,project:result.project};
-   if(engine.current.live.engaged){engine.current.setClipProject(next.project);setProject(next.project);baseline.current=next;}else await restore(next,index);
+   if(engine.current.sessionEngaged){engine.current.setClipProject(next.project);setProject(next.project);baseline.current=next;}else await restore(next,index);
    history.current.push(before,next,`Clip · ${action.kind}`,'user');
    setFocusedRef(result.ref?.id);
    renderHistory(n=>n+1);
@@ -811,7 +859,7 @@ export default function App(){
  }
  function openVersions(){projectAction(async()=>{if(!library.manager.state.id&&!await library.manager.save())return;setVersionsOpen(true);setZipHint(false);});}
  return <><div className="app studio" inert={libraryBusy}><div className="project-filebar"><button onClick={()=>fileAction('home')}>{locale==='zh-CN'?'← 欢迎页':'← Home'}</button><strong>{library.state.name}{library.state.dirty?' *':''}</strong>{slug==='DaisyBell'&&<DaisyBellNotes zh={locale==='zh-CN'}/>}<span className="project-source">{library.state.source==='example'?'EXAMPLE':window.shallowgrooveDesktop?'LOCAL PROJECT':'BROWSER PROJECT'}</span><button disabled={!ready||busy||assistantTurn.current} onClick={()=>fileAction('save')} title="Cmd/Ctrl+S">{locale==='zh-CN'?'保存':'Save'}</button><button disabled={!ready||busy||assistantTurn.current} onClick={()=>fileAction('save-as')}>{locale==='zh-CN'?'另存为…':'Save as…'}</button><button disabled={!ready||busy||assistantTurn.current} onClick={()=>projectAction(exportProject)}>{locale==='zh-CN'?'导出 ZIP':'Export ZIP'}</button><button disabled={busy||assistantTurn.current} onClick={()=>importInput.current?.click()}>{locale==='zh-CN'?'导入':'Import'}</button>{window.shallowgrooveDesktop&&<button disabled={busy||assistantTurn.current} onClick={openVersions}>{locale==='zh-CN'?'版本':'Versions'}</button>}<span role="status" className="project-save-status">{library.state.dirty?(locale==='zh-CN'?'有未保存的修改':'Unsaved changes'):saveStatus}</span><div className="view-switch" role="group" aria-label={locale==='zh-CN'?'工作区视图':'Workspace view'}>
- {engine.current.live.engaged&&<button onClick={()=>engine.current.backToArrangement()}>{locale==='zh-CN'?'恢复编曲播放':'Back to arrangement'}</button>}
+ {engine.current.sessionEngaged&&<button onClick={()=>engine.current.backToArrangement()}>{locale==='zh-CN'?'恢复编曲播放':'Back to arrangement'}</button>}
  {(['arrangement','session'] as const).map(mode=>{const name=mode==='session'?(locale==='zh-CN'?'现场':'Session'):(locale==='zh-CN'?'编曲':'Arrangement');return <button key={mode} title={name} aria-label={name} aria-pressed={workspaceView===mode} disabled={recording||!!countLabel} onClick={()=>{setWorkspaceView(mode);setCollapsed(c=>({...c,overview:false}));}}><i className={mode} aria-hidden="true"/></button>;})}</div></div><header className="transport"><h1>shallowgroove<span>音序 · 声音 · 机架</span></h1><span className="project-title-transport">{library.state.name}</span>
   {periodYear(slug)&&<select aria-label="Sound set" disabled={busy||recording} value={soundSet} onChange={e=>{history.current=new History();baseline.current=null;engine.current.stop();setSoundSet(e.target.value as SoundSet);editorState.current.soundSet=e.target.value as SoundSet;editorState.current.codeDrafts={};setReady(false);generation.current=crypto.randomUUID();setSelectedDevice('channel');setCodes({});setControls({});setValues({});void initializeAudio(project,false,e.target.value as SoundSet).catch(e=>setError(String(e)));}}><option value="period">{periodYear(slug)} · {locale==='zh-CN'?'近似音色':'Inspired patches'}</option><option value="basic">{locale==='zh-CN'?'原基础音色':'Basic synth'}</option></select>}
   <button aria-label="Undo" disabled={recording||busy||assistantTurn.current||!ready||history.current.cursor===0} onClick={()=>void travel(-1)}>↶</button><button aria-label="Redo" disabled={recording||busy||assistantTurn.current||!ready||history.current.cursor===history.current.entries.length} onClick={()=>void travel(1)}>↷</button><TempoControl bpm={bpmAtTick(timingProject,secondsToTick(timingProject,position))} source={ready?engine.current.tempoSource:undefined} resumable={!!project.automation?.some(l=>isTempoTarget(l)&&l.mode==='off'&&l.points.length)} onResume={()=>{const lane=project.automation?.find(isTempoTarget);if(lane)editAutomation({...lane,mode:'read'});}} overridden={project.timing.bpm!==undefined} disabled={!ready||busy||assistantTurn.current} zh={locale==='zh-CN'} onBegin={()=>beginTempo()} onChange={previewTempo} onFinish={finishTempo}/><div className="transport-buttons"><button className="play" title={loop&&engine.current.loopRange?(locale==='zh-CN'?'从播放头播放；在选区外时从左端开始 · 空格':'Play from cursor, or selection start if outside · Space'):(locale==='zh-CN'?'播放 · 空格':'Play · Space')} aria-keyshortcuts="Space" aria-label="Play" aria-pressed={playing} aria-busy={busy} disabled={busy||playing||!!countLabel} onClick={()=>void play()}>{busy?'…':'▶'}</button><button className="transport-record" disabled={busy||!ready||assistantWorking||workspaceView!=='arrangement'} aria-label="Record arrangement" title={recording?(locale==='zh-CN'?'正在录制 · 点击结束录制':'Recording · click to end take'):recordArmed?(locale==='zh-CN'?'录制已就绪':'Recording armed'):(locale==='zh-CN'?'准备录制编曲':'Arm arrangement recording')} aria-pressed={recordArmed} data-recording={recording} data-counting={!!countLabel&&recordArmed} onClick={toggleRecord}>●</button><button aria-label="Pause" title={locale==='zh-CN'?'暂停 · 保留当前位置 · 空格':'Pause · keep position · Space'} disabled={!playing||busy} onClick={pausePlayback}>Ⅱ</button><button aria-label="Stop" title={locale==='zh-CN'?'停止 · 回到开头':'Stop · return to start'} disabled={busy} onClick={stopPlayback}>■</button><button aria-label="Return to start" title={locale==='zh-CN'?'回到开头':'Return to start'} disabled={busy} onClick={()=>seek(0)}>Ⅰ◀</button><button aria-label="Loop" disabled={recording} title={locale==='zh-CN'?'到达右端后回到左端重复播放':'Repeat from the left boundary at the end'} aria-pressed={loop} className={loop?'active':''} onClick={()=>{engine.current.configureLoop(!loop);setLoop(!loop);}}>↻</button></div><output className="clock" aria-label="Current position" title={locale==='zh-CN'?'小节.拍':'Bar.beat'}><span className="clock-musical"><span className="clock-bar" style={{width:barDigits+'ch'}}>{playheadMeter.bar}</span>.<span style={{width:beatDigits+'ch'}}>{playheadMeter.beat}</span><small> · {playheadMeter.numerator}/{playheadMeter.denominator}</small></span><small className="clock-time">{clock(position)} / {clock(duration)}</small></output><GridMenu grid={grid} auto={autoGrid} zh={locale==='zh-CN'} onChange={setGrid}/><button className="metronome-toggle" aria-label={locale==='zh-CN'?'节拍器':'Metronome'} title={locale==='zh-CN'?'节拍器':'Metronome'} aria-pressed={click} onClick={()=>{engine.current.setMetronome(!click);setClick(!click);}}>
@@ -819,7 +867,14 @@ export default function App(){
           <path d="M10 3h3l4 18H5L10 3Z M6 17h10 M11 17l8-12"/>
           <path d="m15.5 8 3 2" strokeWidth="3"/>
         </svg>
-      </button><select className="count-in-menu" aria-label="Count-in" title={locale==='zh-CN'?'预备拍小节数':'Count-in length'} disabled={!!countLabel||recording} value={countBars} onChange={e=>{const n=Number(e.target.value);setCountBars(n);try{localStorage.setItem('shallowgroove.countInBars',String(n));}catch{}}}>{[0,1,2,4].map(n=><option key={n} value={n}>{locale==='zh-CN'?(n?n+' 小节':'无预备拍'):(n?n+(n===1?' bar':' bars'):'No count-in')}</option>)}</select>{countLabel&&<output className="count-in-display" aria-label="Count-in position">{countLabel}</output>}<button disabled={recording||!!countLabel} onClick={async()=>{setMidiIssue('');setMidiLoading(true);midiDialog.current?.showModal();try{await midi.connect();}catch(e){setMidiIssue(String(e));}finally{setMidiLoading(false);}}}>{locale==='zh-CN'?'MIDI 设备':'MIDI devices'}</button><dialog ref={midiDialog} className="versions-dialog"><header><strong>{locale==='zh-CN'?'MIDI 输入设备':'MIDI input devices'}</strong><button onClick={()=>midiDialog.current?.close()} aria-label="Close MIDI settings">×</button></header>{midiIssue?<p role="alert">{midiIssue}</p>:midiLoading?<p>…</p>:midi.devices.length?midi.devices.map(d=><label className="midi-input-row" key={d.id}><input type="checkbox" checked={midi.enabled(d.id)} onChange={e=>{if(!e.target.checked)silenceInput();midi.setEnabled(d.id,e.target.checked);}}/>{d.name||d.id}{d.manufacturer&&<small>{d.manufacturer}</small>}</label>):<p>{locale==='zh-CN'?'尚未检测到 MIDI 输入。连接键盘后会自动显示。':'Connect a MIDI keyboard to see it here.'}</p>}</dialog><select className="locale-select" aria-label="Language / 语言" value={locale} onChange={e=>setLocale(e.target.value as Locale)}><option value="zh-CN">简体中文</option><option value="en">English</option></select></header>
+      </button><select className="count-in-menu" aria-label="Count-in" title={locale==='zh-CN'?'预备拍小节数':'Count-in length'} disabled={!!countLabel||recording} value={countBars} onChange={e=>{const n=Number(e.target.value);setCountBars(n);try{localStorage.setItem('shallowgroove.countInBars',String(n));}catch{}}}>{[0,1,2,4].map(n=><option key={n} value={n}>{locale==='zh-CN'?(n?n+' 小节':'无预备拍'):(n?n+(n===1?' bar':' bars'):'No count-in')}</option>)}</select>{countLabel&&<output className="count-in-display" aria-label="Count-in position">{countLabel}</output>}<button disabled={recording||!!countLabel} onClick={async()=>{setMidiIssue('');setMidiLoading(true);setAudioSettingsOpen(true);midiDialog.current?.showModal();try{if(!window.sgNativeAudio)await midi.connect();}catch(e){setMidiIssue(String(e));}finally{setMidiLoading(false);}}}>{window.sgNativeAudio?(locale==='zh-CN'?'音频 / MIDI':'Audio / MIDI'):(locale==='zh-CN'?'MIDI 设备':'MIDI devices')}</button><dialog onClose={()=>setAudioSettingsOpen(false)} ref={midiDialog} className="versions-dialog"><header><strong>{window.sgNativeAudio?(locale==='zh-CN'?'音频与 MIDI 设置':'Audio and MIDI settings'):(locale==='zh-CN'?'MIDI 输入设备':'MIDI input devices')}</strong><button onClick={()=>midiDialog.current?.close()} aria-label="Close MIDI settings">×</button></header><AudioEngineSettings open={audioSettingsOpen} selectedTrack={typeof selected==='number'?selected:null} onWorking={setBusy} engine={engine.current} disabled={busy||recording||assistantWorking||!!countLabel} zh={locale==='zh-CN'} changed={()=>{setMidiIssue('');refreshMixer(n=>n+1);}}/>{window.sgNativeAudio&&!engine.current.native&&<button disabled={midiLoading} onClick={async()=>{setMidiLoading(true);setMidiIssue('');try{await midi.connect();}catch(e){setMidiIssue(String(e));}finally{setMidiLoading(false);}}}>{locale==='zh-CN'?'检测 MIDI 输入':'Detect MIDI inputs'}</button>}{engine.current.native?<div>
+   {engine.current.native.details.midiInputs.length?engine.current.native.details.midiInputs.map(d=><label key={d.id} className="midi-input-row"><input type="checkbox" disabled={midiLoading} checked={d.enabled} onChange={async e=>{
+    const native=engine.current.native;if(!native)return;
+    const ids=native.details.midiInputs.filter(i=>i.id===d.id?e.target.checked:i.enabled).map(i=>i.id);
+    setMidiLoading(true);setMidiIssue('');
+    try{await native.devices(ids);await window.sgNativeAudio!.savePreferences({midiInputs:ids});refreshMixer(n=>n+1);}catch(error){setMidiIssue(String(error));}finally{setMidiLoading(false);}
+   }}/>{d.name}</label>):<p>{locale==='zh-CN'?'暂无原生 MIDI 输入设备。':'No native MIDI inputs detected.'}</p>}
+   {midiIssue&&<p role="alert">{midiIssue}</p>}</div>:midiIssue?<p role="alert">{midiIssue}</p>:midiLoading?<p>…</p>:midi.devices.length?midi.devices.map(d=><label className="midi-input-row" key={d.id}><input type="checkbox" checked={midi.enabled(d.id)} onChange={e=>{if(!e.target.checked)silenceInput();midi.setEnabled(d.id,e.target.checked);}}/>{d.name||d.id}{d.manufacturer&&<small>{d.manufacturer}</small>}</label>):<p>{locale==='zh-CN'?'尚未检测到 MIDI 输入。连接键盘后会自动显示。':'Connect a MIDI keyboard to see it here.'}</p>}</dialog><select className="locale-select" aria-label="Language / 语言" value={locale} onChange={e=>setLocale(e.target.value as Locale)}><option value="zh-CN">简体中文</option><option value="en">English</option></select></header>
   {zipHint&&<div className="zip-hint" role="status"><span>{locale==='zh-CN'?'已导入 ZIP。多人协作推荐用远端 Git 同步工程版本。':'ZIP imported. For collaboration, sync project versions with a Git remote.'}</span>{window.shallowgrooveDesktop&&<button onClick={openVersions}>{locale==='zh-CN'?'设置同步':'Set up sync'}</button>}<button onClick={()=>setZipHint(false)}>{locale==='zh-CN'?'知道了':'Dismiss'}</button></div>}
   {(error||library.state.error)&&<div className="error" role="alert">{error||library.state.error}<button aria-label="Dismiss error" onClick={()=>{setError('');library.manager.clearError();}}>×</button></div>}
   {assistantWorking&&<div className="assistant-lock-notice" role="status" aria-live="polite"><span aria-hidden="true">◷</span><span>{locale==='zh-CN'?'请等待AI助手更新完成':'Please wait for the AI assistant to finish updating'}</span></div>}
@@ -836,7 +891,12 @@ export default function App(){
   <dialog ref={trackDialog} className="effect-picker"><h3>{locale==='zh-CN'?'轨道操作':'Track actions'}</h3><input aria-label="Track name" value={rename} onChange={e=>setRename(e.target.value)}/><button aria-label="Rename track" onClick={()=>menuAction('rename_track')}>{locale==='zh-CN'?'重命名':'Rename'}</button><button aria-label="Duplicate track" onClick={()=>menuAction('duplicate_track')}>{locale==='zh-CN'?'复制轨道':'Duplicate'}</button><button aria-label="Delete track" onClick={()=>menuAction('delete_track')}>{locale==='zh-CN'?'删除轨道…':'Delete…'}</button><button onClick={()=>trackDialog.current?.close()}>×</button></dialog><dialog ref={addDialog} className="effect-picker"><h3>{locale==='zh-CN'?'添加轨道':'Add track'}</h3><input aria-label="New track name" placeholder="Track name" value={newName} onChange={e=>setNewName(e.target.value)}/><p>{locale==='zh-CN'?'空白 Faust 乐器轨道，不含 MIDI 音符。':'Empty Faust instrument track; no MIDI notes.'}</p><button disabled={busy} onClick={()=>{addDialog.current?.close();void trackAction('add_track',undefined,newName).catch(e=>setError(String(e)));}}>＋ {locale==='zh-CN'?'添加':'Add'}</button><button onClick={()=>addDialog.current?.close()}>{locale==='zh-CN'?'取消':'Cancel'}</button></dialog>
   {historyOpen&&<aside className="history-panel"><header><strong>{locale==='zh-CN'?'工程历史':'Project history'}</strong><button onClick={()=>setHistoryOpen(false)}>×</button></header><div><button disabled={!ready||busy||assistantTurn.current} onClick={()=>projectAction(exportProject)}>{locale==='zh-CN'?'导出 ZIP':'Export ZIP'}</button><label><input type="checkbox" checked={includeHistory} onChange={e=>setIncludeHistory(e.target.checked)}/>{locale==='zh-CN'?'附带撤销历史':'Include history'}</label><label><input type="checkbox" checked={includeChat} onChange={e=>setIncludeChat(e.target.checked)}/>{locale==='zh-CN'?'附带聊天文本':'Include conversation text'}</label><button disabled={busy||assistantTurn.current} onClick={()=>importInput.current?.click()}>{locale==='zh-CN'?'导入工程':'Import project'}</button><button disabled={busy||assistantTurn.current} onClick={()=>{checkpoint();download({format:'shallowgroove-history',version:1,...history.current},'ShallowGroove.history.json');}}>{locale==='zh-CN'?'导出历史':'Export history'}</button></div>{sharedChat.length>0&&<details><summary>{locale==='zh-CN'?'随工程分享的对话':'Shared conversation'}</summary>{sharedChat.map((m,i)=><p key={i}><b>{m.role}</b> {m.text}</p>)}</details>}<ol>{history.current.entries.map((e,i)=><li key={i} className={i>=history.current.cursor?'undone':''}>{i+1}. {e.label} · {e.source==='assistant'?'AI':locale==='zh-CN'?'你':'You'} · {new Date(e.time).toLocaleTimeString()}</li>)}</ol></aside>}
   <dialog ref={parameterDialog} className="parameter-menu" aria-label="Parameter actions" style={parameterFocus?{left:Math.max(8,Math.min(parameterFocus.x,window.innerWidth-260)),top:Math.max(8,Math.min(parameterFocus.y,window.innerHeight-160))}:undefined} onClick={e=>{if(e.target===e.currentTarget)parameterDialog.current?.close();}}><small>{parameterFocus?parameterIdentity(parameterFocus)?.option.lane.label:''}</small><button onClick={()=>parameterAction('automation')}>Automation</button><button onClick={()=>parameterAction('mapping')}>{locale==='zh-CN'?'映射到 Hexblocks':'Map to Hexblocks'}</button></dialog>
-  {recordNotice&&<div className="record-toast" role="status">{recordNotice.text}</div>}
-  <footer><button onClick={()=>setHistoryOpen(v=>!v)}>{locale==='zh-CN'?'历史 / 保存':'History / Save'}</button><span className="selection-status" title={targetLabel}>{locale==='zh-CN'?'当前选择':'Selected'} · {targetLabel}</span><span><i className={ready?'status ready':'status'}/>{ready?'Web Audio / Faust WASM':'Audio not enabled'}<span aria-live="polite" className="audio-state">{audioState}</span></span><span>{ready?`${engine.current.context?.sampleRate} Hz · 16 voices / track`:'MIDI project loaded'}<button disabled={typeof selected!=='number'} onClick={()=>{setCollapsed(c=>({...c,overview:false}));setShowInfo(!showInfo);}}>{locale==='zh-CN'?'轨道说明':'Track info'}</button><b>{saveStatus}</b></span><span className="app-version" aria-label="Application version" data-app-version={appVersion}>v{appVersion}</span></footer>
+  {exportSettingsOpen&&<ExportSettings zh={locale==='zh-CN'} close={()=>setExportSettingsOpen(false)} confirm={format=>{setExportSettingsOpen(false);void exportAudio(format);}}/>}
+  {exportPercent!==null&&<div className="record-toast export-toast" role="status">
+   <span>{locale==='zh-CN'?'正在导出 WAV':'Exporting WAV'} · {exportPercent}%</span>
+   <button disabled={exportCancelling} onClick={()=>{setExportCancelling(true);void window.shallowgrooveDesktop?.cancelAudioExport();}}>{locale==='zh-CN'?'取消':'Cancel'}</button>
+  </div>}
+  {exportPercent===null&&recordNotice&&<div className="record-toast" role="status">{recordNotice.text}</div>}
+  <footer><button onClick={()=>setHistoryOpen(v=>!v)}>{locale==='zh-CN'?'历史 / 保存':'History / Save'}</button><span className="selection-status" title={targetLabel}>{locale==='zh-CN'?'当前选择':'Selected'} · {targetLabel}</span><span><i className={ready?'status ready':'status'}/>{ready?(engine.current.native?'JUCE / Native Faust':'Web Audio / Faust WASM'):'Audio not enabled'}<span aria-live="polite" className="audio-state">{audioState}</span></span><span>{ready?(engine.current.native?(engine.current.native.details.sampleRate??'—')+' Hz':`${engine.current.context?.sampleRate} Hz · 16 voices / track`):'MIDI project loaded'}<button disabled={typeof selected!=='number'} onClick={()=>{setCollapsed(c=>({...c,overview:false}));setShowInfo(!showInfo);}}>{locale==='zh-CN'?'轨道说明':'Track info'}</button><b>{saveStatus}</b></span><span className="app-version" aria-label="Application version" data-app-version={appVersion}>v{appVersion}</span></footer>
  </div>{fileInput}{library.dialog}{versionsOpen&&library.state.id&&<ProjectVersions id={library.state.id} zh={locale==='zh-CN'} close={()=>setVersionsOpen(false)} pause={()=>{engine.current.pause();setPlaying(false);}} save={()=>library.manager.save()} load={text=>library.manager.reloadVersion(text)} chat={()=>readableChat(transcript.current)}/>}</>;
 }

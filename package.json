@@ -20,7 +20,10 @@
     "package:mac:private": "npm run build && node desktop/package.mjs --private",
     "package:win:private": "npm run build && node desktop/package-win.mjs --private",
     "package:portable:private": "npm run package:win:private && node desktop/package-portable.mjs --private",
-    "package:installer:private": "npm run package:win:private && node desktop/package-installer.mjs --private"
+    "package:installer:private": "npm run package:win:private && node desktop/package-installer.mjs --private",
+    "build:native": "cmake -S native -B build-native -DCMAKE_BUILD_TYPE=Release && cmake --build build-native --config Release --target ShallowGrooveEngine ShallowGrooveRack_VST3 ShallowGrooveFX_VST3 --parallel 3",
+    "check:native": "node --experimental-strip-types scripts/check-native-audio.mjs",
+    "dev:desktop": "node scripts/prepare-assets.mjs && electron . --vite-dev --native-preview"
   },
   "dependencies": {
     "@deepseek-ai/dsh-sdk-client": "0.2.2-rc.1",

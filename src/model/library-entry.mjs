@@ -18,3 +18,8 @@ export function makeLibraryEntry(name, patch, previous, current) {
  return {id:previous?.id ?? crypto.randomUUID(), revision:(previous?.revision ?? 0)+1, name:name.trim(),
   kind:patch.kind, code:patch.code, values:Object.fromEntries(controls)};
 }
+
+export function hasPresetName(entries,name,previousId){
+ const normalized=value=>value.trim().normalize('NFC').toLowerCase();
+ return entries.some(entry=>entry.id!==previousId&&normalized(entry.name)===normalized(name));
+}

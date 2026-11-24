@@ -55,7 +55,7 @@ export function conversations(base){
   for(const id of await directories(base)){
    if(!sessionIdPattern.test(id))continue;
    const item=await describe(id);
-   if(item?.scope===scope)items.push({id,title:item.title,updated:item.updated});
+   if(item&&(scope===undefined||item.scope===scope))items.push({id,title:item.title,updated:item.updated,...(scope===undefined?{scope:item.scope}:{})});
   }
   return items.sort((a,b)=>b.updated-a.updated);
  }

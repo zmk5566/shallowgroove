@@ -20,6 +20,10 @@ export interface EffectDevice {libraryRef?:LibraryRef;factory:FaustDspFactory;id
 export interface TrackRack {input:GainNode;output:GainNode;effects:EffectDevice[];sends:Record<ReturnKind,GainNode>;amounts:Record<ReturnKind,number>}
 interface ReturnBus extends EffectChain {gain:GainNode;analyser:AnalyserNode;level:number;muted:boolean}
 export class EffectsRack {
+ beforeChainChange?:(channel:ChannelTarget,devices:EffectDevice[])=>Promise<void>;
+ onDeviceValue?:(device:EffectDevice,address:string,value:number)=>void;
+ onBypass?:(device:EffectDevice)=>void;
+ onBusChange?:(channel:ChannelTarget,address:string,muteChanged?:boolean)=>void;
  onMix?:(channel:ChannelTarget,address:string)=>void;
  onParameter?:(device:EffectDevice,address:string)=>void;
  master:ReturnBus|null=null;
@@ -66,13 +70,14 @@ export class EffectsRack {
     this.setParameter(effect,control.address,value);
    }
    if(values)this.applyLibraryValues(effect,values);
+   await this.beforeChainChange?.(index,[...track.effects,effect]);
    await this.transition(track,()=>track.effects.push(effect));
    if(this.disposed)throw Error('Rack disposed');
    return effect;
   }catch(error){this.destroyDevice(effect);throw error;}
  }
- async move(index:ChannelTarget,id:string,direction:number){const t=this.chain(index),from=t.effects.findIndex(e=>e.id===id),to=from+direction;if(from<0||to<0||to>=t.effects.length)return;await this.transition(t,()=>{const [effect]=t.effects.splice(from,1);t.effects.splice(to,0,effect);});}
- async remove(index:ChannelTarget,id:string){const t=this.chain(index),e=t.effects.find(e=>e.id===id);if(!e)return;await this.transition(t,()=>{this.destroyDevice(e);t.effects=t.effects.filter(x=>x!==e);});}
+ async move(index:ChannelTarget,id:string,direction:number){const t=this.chain(index),from=t.effects.findIndex(e=>e.id===id),to=from+direction;if(from<0||to<0||to>=t.effects.length)return;const ordered=[...t.effects];ordered.splice(to,0,ordered.splice(from,1)[0]);await this.beforeChainChange?.(index,ordered);await this.transition(t,()=>{const [effect]=t.effects.splice(from,1);t.effects.splice(to,0,effect);});}
+ async remove(index:ChannelTarget,id:string){const t=this.chain(index),e=t.effects.find(e=>e.id===id);if(!e)return;await this.beforeChainChange?.(index,t.effects.filter(x=>x!==e));await this.transition(t,()=>{this.destroyDevice(e);t.effects=t.effects.filter(x=>x!==e);});}
  async replace(index:ChannelTarget,id:string,code:string,values?:Record<string,number>){
   const track=this.chain(index),old=track.effects.find(e=>e.id===id);
   if(!old)throw Error('Device not found');
@@ -84,10 +89,11 @@ export class EffectsRack {
     if(before)this.setParameter(next,c.address,old.values[before.address]);
    }
    this.bypass(next,old.bypassed);
+   next.id=old.id;next.libraryRef=old.libraryRef;
+   await this.beforeChainChange?.(index,track.effects.map(e=>e===old?next:e));
    await this.transition(track,()=>{
     const slot=track.effects.indexOf(old);
     if(slot<0)throw Error('Device changed while compiling');
-    next.id=old.id;next.libraryRef=old.libraryRef;
     track.effects[slot]=next;old.output.disconnect();
    });
    if(this.disposed)throw Error('Rack disposed');
@@ -100,11 +106,11 @@ export class EffectsRack {
    this.setParameter(device,address,value);
   }
  }
- bypass(e:EffectDevice,value:boolean){e.bypassed=value;const now=this.context.currentTime;e.dry.gain.setTargetAtTime(value&&!e.wetOnly?1:0,now,.01);e.wet.gain.setTargetAtTime(value?0:1,now,.01);}
- setParameter(e:EffectDevice,address:string,value:number){const c=e.controls.find(c=>c.address===address);if(!c||!Number.isFinite(value))throw Error('Invalid effect parameter');value=e.wetOnly&&c.label==='Mix'?1:Math.max(c.min,Math.min(c.max,value));this.onParameter?.(e,address);e.values[address]=value;e.node.setParamValue(address,value);}
- setSend(index:number,kind:ReturnKind,value:number){if(!Number.isFinite(value))throw Error('Invalid send');const t=this.tracks[index];value=Math.max(0,Math.min(1,value));this.onMix?.(index,'send.'+kind);t.amounts[kind]=value;t.sends[kind].gain.setTargetAtTime(value,this.context.currentTime,.01);}
- setReturn(kind:ReturnKind,level:number,muted:boolean){const r=this.returns[kind];if(!Number.isFinite(level))throw Error('Invalid return level');if(level!==r.level)this.onMix?.(kind,'gain');r.level=Math.max(0,Math.min(1.5,level));r.muted=muted;r.gain.gain.setTargetAtTime(muted?0:r.level,this.context.currentTime,.01);}
- setMaster(level:number,muted:boolean){const m=this.master;if(!m||!Number.isFinite(level))return;if(level!==m.level)this.onMix?.('master','gain');m.level=Math.max(0,Math.min(1.5,level));m.muted=muted;m.gain.gain.setTargetAtTime(muted?0:m.level,this.context.currentTime,.01);}
+ bypass(e:EffectDevice,value:boolean){e.bypassed=value;this.onBypass?.(e);const now=this.context.currentTime;e.dry.gain.setTargetAtTime(value&&!e.wetOnly?1:0,now,.01);e.wet.gain.setTargetAtTime(value?0:1,now,.01);}
+ setParameter(e:EffectDevice,address:string,value:number){const c=e.controls.find(c=>c.address===address);if(!c||!Number.isFinite(value))throw Error('Invalid effect parameter');value=e.wetOnly&&c.label==='Mix'?1:Math.max(c.min,Math.min(c.max,value));this.onParameter?.(e,address);e.values[address]=value;e.node.setParamValue(address,value);this.onDeviceValue?.(e,address,value);}
+ setSend(index:number,kind:ReturnKind,value:number){if(!Number.isFinite(value))throw Error('Invalid send');const t=this.tracks[index];value=Math.max(0,Math.min(1,value));this.onMix?.(index,'send.'+kind);t.amounts[kind]=value;this.onBusChange?.(index,'send.'+kind);t.sends[kind].gain.setTargetAtTime(value,this.context.currentTime,.01);}
+ setReturn(kind:ReturnKind,level:number,muted:boolean){const r=this.returns[kind];if(!Number.isFinite(level))throw Error('Invalid return level');if(level!==r.level)this.onMix?.(kind,'gain');r.level=Math.max(0,Math.min(1.5,level));const muteChanged=r.muted!==muted;r.muted=muted;this.onBusChange?.(kind,'gain',muteChanged);r.gain.gain.setTargetAtTime(muted?0:r.level,this.context.currentTime,.01);}
+ setMaster(level:number,muted:boolean){const m=this.master;if(!m||!Number.isFinite(level))return;if(level!==m.level)this.onMix?.('master','gain');m.level=Math.max(0,Math.min(1.5,level));const muteChanged=m.muted!==muted;m.muted=muted;this.onBusChange?.('master','gain',muteChanged);m.gain.gain.setTargetAtTime(muted?0:m.level,this.context.currentTime,.01);}
  devices(){return [...this.tracks.flatMap(t=>t.effects),...Object.values(this.returns).flatMap(r=>r.effects),...(this.master?.effects??[])];}
  retime(){for(const e of this.devices()){e.node.stop();e.node.start();}}
  tempo(bpm:number,time:number){for(const e of this.devices()){const c=e.controls.find(c=>c.label==='BPM');if(c)e.node.setParamValue(c.address,Math.max(c.min,Math.min(c.max,bpm)),time);}}

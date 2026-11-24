@@ -705,6 +705,7 @@ button.piano-note.dragging { opacity: .25 !important; }
 .arrangement-playhead > i { left:0; }
 .transport .transport-record[aria-pressed="true"][data-recording="false"]{background:var(--panel);color:#ef7967;outline:1px solid currentColor;outline-offset:-1px}
 .record-toast{position:fixed;right:16px;bottom:42px;z-index:30;max-width:min(360px,calc(100vw - 32px));padding:9px 12px;border:1px solid var(--line);background:var(--panel);color:var(--ink);font-size:12px;pointer-events:none}
+.export-toast{display:flex;align-items:center;gap:10px;pointer-events:auto}
 
 .sidebar-monitors { flex:0 1 auto; min-height:32px; overflow:auto; }
 .sidebar-chat { display:flex; flex:1; min-height:min(200px,calc(100% - 76px)); max-height:calc(100% - 76px); overflow:hidden; }
@@ -735,3 +736,23 @@ button.piano-note.dragging { opacity: .25 !important; }
 .daisy-notes { width:min(520px,92vw); max-height:80vh; overflow:auto; white-space:normal; }
 .daisy-notes p { line-height:1.6; }
 .daisy-notes a { color:var(--signal); }
+
+.native-audio-settings { display:grid; gap:6px; border-bottom:1px solid var(--line); padding:8px 0; margin-bottom:8px; }
+.native-audio-settings select { background:var(--bg); color:var(--ink); }
+.native-audio-settings small { color:var(--muted); }
+
+.native-output-settings{display:grid;gap:6px}
+.native-output-settings label{display:grid;grid-template-columns:minmax(80px,auto) minmax(0,1fr);gap:8px;align-items:center}
+.native-output-settings select{width:100%;min-width:0}
+.native-output-settings output{color:var(--muted)}
+.native-output-settings button{justify-self:start}
+.wav-settings{width:min(360px,calc(100vw - 28px))}
+.wav-settings form{display:grid;gap:14px}
+.wav-settings label{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.wav-settings .project-dialog-actions{margin-top:4px}
+
+.fx-assistant { width:100%; height:100dvh; display:flex; min-width:0; }
+.fx-assistant .assistant.expanded { position:static; width:100%; min-width:0; height:100%; box-shadow:none; }
+.fx-assistant .assistant-body { min-height:0; }
+.fx-assistant .thread-picker { max-width:calc(100vw - 20px); }
+.fx-assistant .assistant-composer small { display:none; }

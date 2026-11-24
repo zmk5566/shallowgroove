@@ -11,6 +11,7 @@ export async function stageApplication(root,platform,privateEdition=privateBuild
  for(const file of ['package.json','package-lock.json','LICENSE','LICENSE-EXAMPLES','NOTICE.md','desktop','server','src','dist']){
   await cp(join(root,file),join(app,file),{recursive:true,filter:path=>basename(path)!=='private-config.json'&&!/^\.env(?:\.|$)/.test(basename(path))});
  }
+ await cp(join(root,'patches/effects'),join(app,'patches/effects'),{recursive:true});
  if(privateEdition){
   const config=JSON.parse(await readFile(join(root,'desktop/private-config.json'),'utf8'));
   if(!config.DEEPSEEK_API_KEY)throw Error('Private build requires a DeepSeek key');

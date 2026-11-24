@@ -45,10 +45,20 @@ export const definitions=[
  {name:'replace_faust_patch',action:'replace_patch',description:'Compile and replace the selected Faust instrument or effect with complete DSP source. Include a meaningful declare name "..."; matching the resulting sound; the UI reads this as the patch title. retaining the prior device if compilation fails. On a MIDI channel selection, the target defaults to that channel’s instrument. For an effect, use select_target first. Works during playback; preserve transport state. Only after an explicit request to implement a patch change, when requested by the user. Prefer existing parameter adjustments when sufficient.',parameters:{code:{type:'string',required:true}}},
 ];
 export function buildMusicTools(){
- return definitions.map(definition=>defineTool({
-  name:definition.name,description:definition.description,parameters:definition.parameters,
+ const fx=process.env.SHALLOWGROOVE_FX==='1';
+ const tools=fx
+  ?definitions.filter(d=>['inspect','replace_patch','search_effect_library','load_library_effect','set_parameter'].includes(d.action))
+  :definitions;
+ return tools.map(definition=>defineTool({
+  name:definition.name,description:fx&&definition.action==='replace_patch'
+   ?'Compile a complete stereo Faust draft for this effect. If validation fails, correct the compiler diagnostic and retry. Only a validated draft is offered for audition. Use ma.SR from stdfaust.lib for sample rate.'
+   :definition.description,parameters:definition.parameters,
   output:{schema:{type:'string'},render:(_args,value)=>[{type:'text',text:value}]},
   async execute(args,exec){
+   if(fx&&definition.action==='replace_patch'){
+    const {validateFxDraft}=await import('./validate-fx.mjs');
+    await validateFxDraft(args.code,exec.signal);
+   }
    const response=await fetch(process.env.SHALLOWGROOVE_BRIDGE_URL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${process.env.SHALLOWGROOVE_BRIDGE_TOKEN}`},body:JSON.stringify({...args,action:definition.action}),signal:exec.signal});
    const data=await response.json();if(!response.ok||data.error)throw Error(data.error??`Bridge HTTP ${response.status}`);return JSON.stringify(data.result);
   },

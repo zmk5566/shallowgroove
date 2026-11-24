@@ -4,6 +4,7 @@ import {packager} from '@electron/packager';
 import {mkdir,copyFile,chmod,readFile,cp,rm} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {trimRuntime} from './trim-runtime.mjs';
+import {prepareNative} from './prepare-native.mjs';
 import {prepareConnect} from './prepare-connect.mjs';
 const root=resolve(import.meta.dirname,'..');
 const {version:appVersion}=JSON.parse(await readFile(resolve(root,'package.json'),'utf8'));
@@ -15,6 +16,7 @@ if(process.argv.includes('--local-deps')){
  if(process.platform!=='darwin'||process.arch!=='arm64')throw Error('Local packaging requires an arm64 Mac');
  await cp(resolve(root,'node_modules'),resolve(app,'node_modules'),{recursive:true,verbatimSymlinks:true});
 }else execFileSync('npm',['ci','--omit=dev','--os=darwin','--cpu=arm64','--ignore-scripts','--no-audit','--no-fund'],{cwd:app,stdio:'inherit'});
+await prepareNative(resolve(runtime,'native'),'darwin');
 await trimRuntime(app);
 await copyFile(resolve(root,'node_modules/node/bin/node'),resolve(runtime,'node'));
 await chmod(resolve(runtime,'node'),0o755);

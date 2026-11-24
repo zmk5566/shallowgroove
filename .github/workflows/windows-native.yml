@@ -1,0 +1,55 @@
+name: Windows x64 native audio
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'desktop/**'
+      - '.github/workflows/windows-native.yml'
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Extract Faust SDK
+        shell: pwsh
+        run: |
+          $sdk = Join-Path $env:RUNNER_TEMP 'faust-sdk'
+          $installer = Join-Path $env:RUNNER_TEMP 'faust-win64.exe'
+          curl.exe -fLsS --retry 3 https://github.com/grame-cncm/faust/releases/download/2.81.2/Faust-2.81.2-win64.exe -o $installer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $installer).Hash -ne '31667eb378cb560cb124ec9d6c85236644bc5191ccc49ed9f99de01e3d7c0b02') { throw 'Faust SDK checksum mismatch' }
+          7z x $installer "-o$sdk" 'include/*' 'lib/faust.dll' 'lib/faust.lib' 'share/faust/*' -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "FAUST_ROOT=$sdk" >> $env:GITHUB_ENV
+      - name: Build and stage standalone runtime
+        run: |
+          nuget install Microsoft.Web.WebView2 -Version 1.0.2903.40 -OutputDirectory "$env:RUNNER_TEMP/webview2" -NonInteractive
+          cmake -S native -B build-native -A x64 "-DJUCE_WEBVIEW2_PACKAGE_LOCATION=$env:RUNNER_TEMP/webview2"
+          node desktop/prepare-native.mjs build/windows-x64-native
+          cmake --build build-native --config Release --target ShallowGrooveHostCheck
+      - name: Check staged runtime
+        shell: pwsh
+        run: |
+          Rename-Item $env:FAUST_ROOT faust-sdk-offline
+          $env:SG_TEST_NATIVE_BINARY = (Resolve-Path build/windows-x64-native/ShallowGrooveEngine.exe).Path
+          $hostCheck = (Get-ChildItem build-native -Filter ShallowGrooveHostCheck.exe -Recurse | Select-Object -First 1).FullName
+          & $hostCheck --fx "build/windows-x64-native/plug-ins/ShallowGroove FX.vst3"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $hostCheck "build/windows-x64-native/plug-ins/ShallowGroove Rack.vst3"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node native/metronome-test.mjs $env:SG_TEST_NATIVE_BINARY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node native/inspector-test.mjs $env:SG_TEST_NATIVE_BINARY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test --test-name-pattern="native WAV" desktop/export-audio.test.cjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-native
+          path: build/windows-x64-native/
+          if-no-files-found: error

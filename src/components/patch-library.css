@@ -13,3 +13,11 @@
 .patch-library-current-row { justify-content: space-between; }
 .patch-library-current-row strong, .patch-library-current-row small { margin-inline-start: 4px; }
 .patch-library [role=alert] { color: var(--ink); border-inline-start: 2px solid var(--red); padding-inline-start: 8px; overflow-wrap: anywhere; }
+
+.patch-library-results button[aria-current=true] { border-color: var(--signal); }
+
+.patch-library .preset-save-dialog { position:fixed; inset:0; margin:auto; width:min(360px,90vw); height:fit-content; padding:16px; color:var(--ink); background:var(--surface); border:1px solid var(--line); }
+.preset-save-dialog::backdrop { background:#0008; }
+.patch-library .preset-save-dialog form { margin-top:12px; justify-content:flex-end; }
+.preset-save-dialog label { display:grid; gap:5px; width:100%; }
+.preset-save-dialog p { width:100%; }

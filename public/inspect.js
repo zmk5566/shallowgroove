@@ -21,7 +21,7 @@ function setup(info){
   panel.className=mode;panel.hidden=true;caption.textContent=names[i];panel.append(caption);
   if(mode==='performance'){
    const detail=document.createElement('small');
-   detail.textContent=(zh?'离线 DSP 测试 · ':'Offline DSP benchmark · ')+(effect?'440 Hz':zh?'单音 C4':'one note, C4')+' · '+rate+' Hz · '+(zh?'耗时 / 音频时长':'render time / audio duration');
+   detail.textContent=info.livePerformance?(zh?'实时 DSP 耗时 / 音频时长':'Live DSP time / audio duration'):(zh?'离线 DSP 测试 · ':'Offline DSP benchmark · ')+(effect?'440 Hz':zh?'单音 C4':'one note, C4')+' · '+rate+' Hz · '+(zh?'耗时 / 音频时长':'render time / audio duration');
    panel.append(detail,document.createElement('output'));
   }else{
    const canvas=document.createElement('canvas'),axis=document.createElement('small');
@@ -55,6 +55,8 @@ bus.onmessage=({data})=>{
  if(!panel||panel.hidden)return;
  if(data.mode==='performance'){
   panel.querySelector('output').textContent=data.error??((zh?'平均 ':'Mean ')+data.average.toFixed(2)+'% · '+(zh?'峰值 ':'Peak ')+data.peak.toFixed(2)+'%');
+ }else if(data.error){
+  panel.querySelector('.legend').textContent=data.error;
  }else if(data.mode==='spectrogram'){
   paintSpectrogram?.(data.lines[0],data.seconds);
  }else drawInspector(panel.querySelector('canvas'),data.mode,data.lines,rate,effect,{grid,input:inputColor,output:outputColor});

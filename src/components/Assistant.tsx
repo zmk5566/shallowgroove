@@ -9,15 +9,18 @@ import type {MusicCommand,Selection} from '../assistant/contracts';
 export interface AssistantContext {generation:string;projectId:string;selection:Selection;label:string;[key:string]:unknown}
 type Entry={id:string;role:'user'|'assistant'|'tool'|'error';text:string;context?:string;undo?:()=>Promise<void>;undone?:boolean};
 type Status={configured:boolean;model?:string;message?:string;token?:string};
-type AssistantProps={heading:React.ReactNode;onUserGesture:()=>void;locale:Locale;context:Pick<AssistantContext,'selection'|'generation'>;getContext:(selection:Selection)=>AssistantContext;execute:(selection:Selection,command:MusicCommand,generation:string)=>Promise<{result:unknown;undo?:()=>Promise<void>;selection?:Selection}>};
-type Thread={id:string;title:string;updated:number};
-type OpenThread={id:string;entries:Entry[]};
-export function Assistant({projectScope,...props}:AssistantProps&{projectScope:string}){
+type AssistantProps={refreshContext?:(selection:Selection)=>Promise<AssistantContext>;heading:React.ReactNode;onUserGesture:()=>void;locale:Locale;context:Pick<AssistantContext,'selection'|'generation'>;getContext:(selection:Selection)=>AssistantContext;execute:(selection:Selection,command:MusicCommand,generation:string)=>Promise<{result:unknown;undo?:()=>Promise<void>;selection?:Selection}>};
+type Thread={scope?:string;id:string;title:string;updated:number};
+type OpenThread={scope?:string;id:string;entries:Entry[]};
+type ThreadRef={id:string;scope:string};
+export function Assistant({projectScope,initialThread,onThreadChange,...props}:AssistantProps&{projectScope:string;initialThread?:ThreadRef;onThreadChange?:(thread:ThreadRef)=>void}){
  const zh=props.locale==='zh-CN',key='shallowgroove.conversation.'+projectScope;
  const [threads,setThreads]=useState<Thread[]>([]),[opened,setOpened]=useState<OpenThread|null>(null);
+ const [chatVersion,setChatVersion]=useState(0);
  const [locked,setLocked]=useState(false),[loading,setLoading]=useState(true),[issue,setIssue]=useState(''),[attempt,setAttempt]=useState(0);
  const token=useRef('');
- function remember(id:string){try{localStorage.setItem(key,id);}catch{/* History is also indexed by the server. */}}
+ const [otherThreads,setOtherThreads]=useState<Thread[]|null>(null);
+ function remember(id:string,scope:string){onThreadChange?.({id,scope});try{localStorage.setItem(key,id);localStorage.setItem(key+'.scope',scope);}catch{/* History is also indexed by the server. */}}
  async function api(route:string,data:object,signal?:AbortSignal){
   const response=await fetch('/api/assistant/'+route,{method:'POST',headers:{'Content-Type':'application/json','X-Shallowgroove-Token':token.current},body:JSON.stringify({scope:projectScope,...data}),signal});
   if(!response.ok)throw Error('HTTP '+response.status);
@@ -30,27 +33,29 @@ export function Assistant({projectScope,...props}:AssistantProps&{projectScope:s
    const status=await fetch('/api/assistant/status',{signal}).then(r=>r.json());
    token.current=status.token;
    const list:Thread[]=await api('conversations',{},signal);
-   let last:string|null=null;try{last=localStorage.getItem(key);}catch{}
+   let last:string|null=null,scope=projectScope;
+   try{last=localStorage.getItem(key);scope=localStorage.getItem(key+'.scope')??scope;}catch{}
+   if(initialThread?.id){last=initialThread.id;scope=initialThread.scope;}
    const id=last??list[0]?.id??crypto.randomUUID();
-   const entries=list.some(t=>t.id===id)?await api('conversation',{sessionId:id},signal):[];
-   if(!signal.aborted){setThreads(list);setOpened({id,entries});remember(id);}
+   const entries=(scope!==projectScope||list.some(t=>t.id===id))?await api('conversation',{sessionId:id,scope},signal):[];
+   if(!signal.aborted){setThreads(list);setOpened({id,entries,scope});remember(id,scope);}
   })().catch(e=>{if(!signal.aborted)setIssue(String(e));}).finally(()=>{if(!signal.aborted)setLoading(false);});
   return ()=>controller.abort();
  },[projectScope,attempt]);
- async function choose(id:string){
+ async function choose(id:string,scope=projectScope){
   if(locked||loading)return;
   setLoading(true);setIssue('');
-  try{const entries=id?await api('conversation',{sessionId:id}):[];
-   const next=id||crypto.randomUUID();remember(next);setOpened({id:next,entries});
+  try{const entries=id?await api('conversation',{sessionId:id,scope}):[];
+   const next=id||crypto.randomUUID();remember(next,scope);setOpened({id:next,entries,scope});setChatVersion(n=>n+1);
   }catch(e){setIssue(String(e));}finally{setLoading(false);}
  }
  const threadPicker=useRef<HTMLDialogElement>(null);
- function pick(id:string){
+ function pick(id:string,scope?:string){
   threadPicker.current?.close();
-  if(id!==opened?.id)void choose(id);
+  void choose(id,scope);
  }
  const controls=<div className="assistant-threads">
-  <button type="button" aria-haspopup="dialog" disabled={locked||loading} onClick={()=>threadPicker.current?.showModal()}>{zh?'对话':'Chats'} ▾</button>
+  <button type="button" aria-haspopup="dialog" disabled={locked||loading} onClick={()=>{setOtherThreads(null);threadPicker.current?.showModal();void api('conversations',{}).then(setThreads).catch(e=>setIssue(String(e)));}}>{zh?'对话':'Chats'} ▾</button>
   {issue&&<button title={issue} onClick={()=>setAttempt(n=>n+1)}>{zh?'重试':'Retry'}</button>}
   <dialog ref={threadPicker} className="thread-picker" aria-label={zh?'历史对话':'Conversation history'} onClick={e=>{
    if(e.target!==e.currentTarget)return;
@@ -59,18 +64,19 @@ export function Assistant({projectScope,...props}:AssistantProps&{projectScope:s
   }}>
    <header><strong>{zh?'历史对话':'Conversation history'}</strong><button type="button" aria-label={zh?'关闭':'Close'} onClick={()=>threadPicker.current?.close()}>×</button></header>
    <button className="thread-new" type="button" onClick={()=>pick('')}>{zh?'＋ 新对话':'+ New chat'}</button>
-   {threads.length>0?<div className="thread-list">{threads.map(t=><button key={t.id} type="button" aria-current={t.id===opened?.id?'true':undefined} title={t.title} onClick={()=>pick(t.id)}>
+   <button type="button" onClick={async()=>{try{setOtherThreads(otherThreads?null:await api('conversations',{all:true}));}catch(e){setIssue(String(e));}}}>{otherThreads?(zh?'当前会话列表':'Current workspace'):(zh?'所有工作区的对话':'Chats from all workspaces')}</button>
+   {(otherThreads??threads).length>0?<div className="thread-list">{(otherThreads??threads).map(t=><button key={t.id} type="button" aria-current={t.id===opened?.id?'true':undefined} title={t.title} onClick={()=>pick(t.id,t.scope)}>
     <span>{t.title}</span><time dateTime={new Date(t.updated).toISOString()}>{new Date(t.updated).toLocaleDateString(props.locale,{month:'short',day:'numeric'})}</time>
    </button>)}</div>:<p>{zh?'暂无历史对话':'No conversations yet'}</p>}
   </dialog>
  </div>;
  const header=<header className="assistant-heading">{props.heading}{controls}</header>;
  if(!opened)return <aside className="assistant expanded"><div className="assistant-body">{header}</div></aside>;
- return <Chat key={opened.id} {...props} controls={header} thread={opened} onWorking={setLocked} onMessage={text=>{
-  setThreads(current=>[{id:opened.id,title:current.find(t=>t.id===opened.id)?.title??text.slice(0,80),updated:Date.now()},...current.filter(t=>t.id!==opened.id)]);
+ return <Chat key={opened.id+':'+chatVersion} {...props} controls={header} thread={opened} onWorking={setLocked} onMessage={text=>{
+  if(!opened.scope||opened.scope===projectScope)setThreads(current=>[{id:opened.id,title:current.find(t=>t.id===opened.id)?.title??text.slice(0,80),updated:Date.now()},...current.filter(t=>t.id!==opened.id)]);
  }} loading={loading}/>;
 }
-function Chat({onUserGesture,locale,context,getContext,execute,thread,controls,onWorking,onMessage,loading}:AssistantProps&{thread:OpenThread;controls:React.ReactNode;onWorking:(value:boolean)=>void;onMessage:(text:string)=>void;loading:boolean}){
+function Chat({refreshContext,onUserGesture,locale,context,getContext,execute,thread,controls,onWorking,onMessage,loading}:AssistantProps&{thread:OpenThread;controls:React.ReactNode;onWorking:(value:boolean)=>void;onMessage:(text:string)=>void;loading:boolean}){
  const zh=locale==='zh-CN';const [input,setInput]=useState(''),[entries,setEntries]=useState<Entry[]>(thread.entries),[working,setWorking]=useState(false),[continuations,setContinuations]=useState(0),[canResume,setCanResume]=useState(false),[status,setStatus]=useState<Status>({configured:false});
  const [files,setFiles]=useState<ChatAttachment[]>([]),[reading,setReading]=useState(false),[fileError,setFileError]=useState('');
  const picker=useRef<HTMLInputElement>(null);
@@ -92,11 +98,13 @@ function Chat({onUserGesture,locale,context,getContext,execute,thread,controls,o
  async function send(override?:string){
   if((!(override??input).trim()&&!files.length)||loading||reading||working||!status.configured)return;
   onUserGesture(); // Resume during the actual click/Enter, before a network round-trip loses user activation.
-  let selected=structuredClone(context.selection);const snapshot=latest.current.getContext(selected),text=(override??input).trim()||(zh?'请概述附件内容。':'Summarize the attached material.'),generation=snapshot.generation;
+  let selected=structuredClone(context.selection);let snapshot:AssistantContext;
+  try{snapshot=refreshContext?await refreshContext(selected):latest.current.getContext(selected);}catch(e){append({role:'error',text:String(e)});return;}
+  const text=(override??input).trim()||(zh?'请概述附件内容。':'Summarize the attached material.'),generation=snapshot.generation;
   append({role:'user',text:[text,...files.map(f=>'📎 '+f.name)].join('\n'),context:`${snapshot.label} · ${zh?'协作':'Collaborate'}`});setInput('');onMessage(text);onWorking(true);setWorking(true);setContinuations(0);setCanResume(false);window.dispatchEvent(new Event('shallowgroove-turn-start'));
   const controller=new AbortController();abort.current=controller;let final=false,streamId='';
   try{
-   const response=await fetch('/api/assistant/turn',{method:'POST',headers:{'Content-Type':'application/json','X-Shallowgroove-Token':status.token??''},body:JSON.stringify({sessionId:session.current,text,attachments:files,context:snapshot,locale}),signal:controller.signal});
+   const response=await fetch('/api/assistant/turn',{method:'POST',headers:{'Content-Type':'application/json','X-Shallowgroove-Token':status.token??''},body:JSON.stringify({sessionId:session.current,text,attachments:files,context:{...snapshot,conversationProject:thread.scope??snapshot.conversationProject},locale}),signal:controller.signal});
    if(!response.ok)throw Error((await response.json()).error??`HTTP ${response.status}`);
    if(!response.body)throw Error('Missing response stream');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
    while(true){const {value,done}=await reader.read();buffer+=decoder.decode(value,{stream:!done});const lines=buffer.split('\n');buffer=lines.pop()??'';
@@ -110,7 +118,7 @@ function Chat({onUserGesture,locale,context,getContext,execute,thread,controls,o
       try{
        if(controller.signal.aborted)throw Error('Cancelled');
        if(latest.current.context.generation!==generation)throw Error('Project or audio setup changed; command cancelled.');
-       const result=event.command.action==='inspect'?{result:latest.current.getContext(selected)}:await latest.current.execute(selected,event.command,generation);
+       const result=event.command.action==='inspect'?{result:refreshContext?await refreshContext(selected):latest.current.getContext(selected)}:await latest.current.execute(selected,event.command,generation);
        if(result.selection)selected=structuredClone(result.selection);
        payload={result:result.result};const undo=result.undo;
        setEntries(s=>s.map(e=>e.id===id?{...e,context:latest.current.getContext(selected).label,text:`${event.command.action} ✓\n${JSON.stringify(result.result,null,2)}`,undo:undo?async()=>{if(latest.current.context.generation!==generation)throw Error('The project has changed.');await undo();}:undefined}:e));

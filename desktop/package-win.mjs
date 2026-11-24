@@ -4,17 +4,22 @@ import {execFileSync} from 'node:child_process';
 import {mkdir,cp,readFile,writeFile,copyFile,rm} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {trimRuntime} from './trim-runtime.mjs';
+import {prepareNative} from './prepare-native.mjs';
 import {prepareConnect} from './prepare-connect.mjs';
 const root=resolve(import.meta.dirname,'..');
 const stage=await stageApplication(root,'win');
 const app=resolve(stage,'app'),runtime=resolve(stage,'runtime');
 const {version:appVersion}=JSON.parse(await readFile(resolve(root,'package.json'),'utf8'));
 await mkdir(app,{recursive:true});await mkdir(runtime,{recursive:true});
-const npm=process.platform==='win32'?'npm.cmd':'npm';
-execFileSync(npm,['ci','--omit=dev','--os=win32','--cpu=x64','--ignore-scripts','--no-audit','--no-fund'],{cwd:app,stdio:'inherit'});
+// Run npm through Node on Windows (CreateProcess cannot launch npm.cmd directly).
+const npm=(args,options)=>process.env.npm_execpath
+ ? execFileSync(process.execPath,[process.env.npm_execpath,...args],options)
+ : execFileSync('npm',args,{...options,shell:process.platform==='win32'});
+npm(['ci','--omit=dev','--os=win32','--cpu=x64','--ignore-scripts','--no-audit','--no-fund'],{cwd:app,stdio:'inherit'});
+await prepareNative(resolve(runtime,'native'),'win32');
 await trimRuntime(app);
 const version=JSON.parse(await readFile(resolve(root,'node_modules/node/package.json'),'utf8')).version;
-const packed=JSON.parse(execFileSync(npm,['pack',`node-win-x64@${version}`,'--json','--pack-destination',stage],{cwd:stage,encoding:'utf8'}));
+const packed=JSON.parse(npm(['pack',`node-win-x64@${version}`,'--json','--pack-destination',stage],{cwd:stage,encoding:'utf8'}));
 execFileSync('tar',['-xzf',resolve(stage,packed[0].filename),'-C',stage]);
 await copyFile(resolve(stage,'package/bin/node.exe'),resolve(runtime,'node.exe'));
 const electronVersion=JSON.parse(await readFile(resolve(root,'node_modules/electron/package.json'),'utf8')).version;

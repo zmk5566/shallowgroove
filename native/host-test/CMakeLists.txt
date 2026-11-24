@@ -1,0 +1,5 @@
+juce_add_console_app(ShallowGrooveHostCheck PRODUCT_NAME "ShallowGrooveHostCheck")
+target_sources(ShallowGrooveHostCheck PRIVATE HostCheck.cpp)
+target_compile_definitions(ShallowGrooveHostCheck PRIVATE JUCE_PLUGINHOST_VST3=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_link_libraries(ShallowGrooveHostCheck PRIVATE juce::juce_audio_processors)
+set_target_properties(ShallowGrooveHostCheck PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")

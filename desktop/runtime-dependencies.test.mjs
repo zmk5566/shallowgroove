@@ -16,6 +16,7 @@ async function fixture(t){
   if(code){await mkdir(join(dir,'lib'));await writeFile(join(dir,'lib/index.js'),code);}
   return dir;
  }
+ await pkg('@grame/faustwasm');
  await pkg('@deepseek-ai/dsh-sdk-client',{dependencies:{'@deepseek-ai/dsh':'*'}});
  await pkg('@deepseek-ai/dsh-sdk-minimal',{dependencies:{'@deepseek-ai/dsh-sdk-app':'*',service:'*'}});
  for(const name of ['dsh-web','dsh-web-search-deepseek','dsh-tool-web','dsh-tools'])await pkg('@deepseek-ai/'+name);await pkg('ws');
@@ -34,8 +35,8 @@ test('keeps required peers and nested packages while removing unrelated profiles
  assert.ok(preview.removed.includes('node_modules/office'));
  await access(join(app,'node_modules/office/package.json'));
  const result=await runtimeDependencies(app);
- assert.equal(result.kept,13);
- for(const file of ['peer/package.json','service/node_modules/nested/package.json','boot/package.json'])await access(join(app,'node_modules',file));
+ assert.equal(result.kept,14);
+ for(const file of ['@grame/faustwasm/package.json','peer/package.json','service/node_modules/nested/package.json','boot/package.json'])await access(join(app,'node_modules',file));
  for(const file of ['office','unused','.bin'])await assert.rejects(access(join(app,'node_modules',file)),{code:'ENOENT'});
 });
 

@@ -1,3 +1,4 @@
+import {nativeInspector} from './native-inspect.ts';
 import type {AudioEngine} from './engine';
 import type {ChannelTarget,EffectDevice} from './effects';
 
@@ -18,10 +19,18 @@ function openInspector(engine:AudioEngine,track:ChannelTarget,effect:EffectDevic
  const title=prefix+name+(channelOutput?(zh?' · 通道输出':' · Channel output'):'');
  // Summing the wet and dry gains gives the device output, including bypass,
  // without attaching to the rack edge that changes when devices are reordered.
+ const native=engine.native;
+ if(native){
+  const current=()=>engine.native===native && engine.effects===rack && (channelOutput?engine.mixerOutput(track)===channelOutput:effect?!!rack?.devices().includes(effect):voice?.node===instrument && engine.voices.includes(voice!));
+  const source:InspectSource={title,rate:native.details.sampleRate??ctx.sampleRate,effect:!!effect,canBenchmark:!channelOutput,
+   livePerformance:true,identity:channelOutput??effect??instrument!,current,
+   subscribe:nativeInspector(native.probeRequest,track,channelOutput?'channel':effect?.id??'instrument',current)};
+  present(source,zh);return;
+ }
  const sources:AudioNode[][]=channelOutput?[[channelOutput]]:effect?[[effect.input],[effect.dry,effect.wet]]:[[voice!.output]];
  const source={
   title,rate:ctx.sampleRate,effect:!!effect,canBenchmark:!channelOutput,identity:channelOutput??effect??instrument!,
-  current:()=>engine.effects===rack&&(channelOutput?engine.mixerOutput(track)===channelOutput:effect?!!rack?.devices().includes(effect):voice?.node===instrument&&engine.voices.includes(voice!)),
+  current:()=>!engine.native&&engine.effects===rack&&(channelOutput?engine.mixerOutput(track)===channelOutput:effect?!!rack?.devices().includes(effect):voice?.node===instrument&&engine.voices.includes(voice!)),
   subscribe(mode:Mode,publish:(data:InspectFrame)=>void):()=>void {
   if(mode==='performance'){
    if(channelOutput)return ()=>{};
@@ -48,13 +57,16 @@ function openInspector(engine:AudioEngine,track:ChannelTarget,effect:EffectDevic
   return ()=>{clearInterval(timer);for(const {nodes,tap} of taps){for(const node of nodes){try{node.disconnect(tap);}catch{/* Device already removed. */}}tap.disconnect();}};
  }
  };
+ present(source,zh);
+}
+function present(source:InspectSource,zh:boolean){
  const openWindow=(modes?:Mode[])=>openInspectorWindow(source,zh,modes);
  if(!sidebarInspect){openWindow();return;}
  sidebarInspect({...source,openWindow});
 }
 export interface InspectFrame { mode:Mode; lines?:Uint8Array[]; seconds?:number; average?:number; peak?:number; error?:string }
 export interface InspectSource {
- title:string;rate:number;effect:boolean;canBenchmark:boolean;identity:object;current:()=>boolean;
+ title:string;rate:number;effect:boolean;canBenchmark:boolean;livePerformance?:boolean;identity:object;current:()=>boolean;
  subscribe:(mode:Mode,publish:(frame:InspectFrame)=>void)=>()=>void;
 }
 export type InspectRequest=InspectSource & {openWindow:(modes?:Mode[])=>void};
@@ -83,7 +95,7 @@ function openInspectorWindow(source:InspectSource,zh:boolean,modes?:Mode[]){
  },250);
  window.addEventListener('pagehide',close);
  bus.onmessage=({data})=>{
-  if(data.ready)bus.postMessage({title:source.title,zh,canBenchmark:source.canBenchmark,effect:source.effect,rate:source.rate,modes});
+  if(data.ready)bus.postMessage({title:source.title,zh,canBenchmark:source.canBenchmark,livePerformance:source.livePerformance,effect:source.effect,rate:source.rate,modes});
   else if(data.close)close();
   else if(['wave','spectrum','spectrogram','performance'].includes(data.mode))data.enabled?enable(data.mode):disable(data.mode);
  };

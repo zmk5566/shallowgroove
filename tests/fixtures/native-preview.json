@@ -1,0 +1,160 @@
+{
+  "format": "shallowgroove-project",
+  "version": 1,
+  "session": {
+    "project": {
+      "schema": "shallowgroove.project.draft-1",
+      "title": "Native audio comparison",
+      "timing": {
+        "unit": "ticks",
+        "ppqn": 480,
+        "end_tick": 1920,
+        "default_tempo_us_per_quarter": 500000
+      },
+      "global_events": [],
+      "tracks": [
+        {
+          "id": "native-preview-1",
+          "name": "Shallow Synth",
+          "midi_channel": 1,
+          "gain": 1,
+          "pan": 0,
+          "mute": false,
+          "solo": false,
+          "events": [
+            {
+              "kind": "midi",
+              "channel": 1,
+              "tick": 120,
+              "order": 0,
+              "status": 144,
+              "data": [
+                60,
+                96
+              ]
+            },
+            {
+              "kind": "midi",
+              "channel": 1,
+              "tick": 360,
+              "order": 1,
+              "status": 128,
+              "data": [
+                60,
+                0
+              ]
+            },
+            {
+              "kind": "midi",
+              "channel": 1,
+              "tick": 600,
+              "order": 2,
+              "status": 144,
+              "data": [
+                64,
+                96
+              ]
+            },
+            {
+              "kind": "midi",
+              "channel": 1,
+              "tick": 600,
+              "order": 4,
+              "status": 144,
+              "data": [
+                67,
+                96
+              ]
+            },
+            {
+              "kind": "midi",
+              "channel": 1,
+              "tick": 840,
+              "order": 3,
+              "status": 128,
+              "data": [
+                64,
+                0
+              ]
+            },
+            {
+              "kind": "midi",
+              "channel": 1,
+              "tick": 840,
+              "order": 5,
+              "status": 128,
+              "data": [
+                67,
+                0
+              ]
+            },
+            {
+              "kind": "midi",
+              "channel": 1,
+              "tick": 1080,
+              "order": 6,
+              "status": 144,
+              "data": [
+                69,
+                96
+              ]
+            },
+            {
+              "kind": "midi",
+              "channel": 1,
+              "tick": 1560,
+              "order": 7,
+              "status": 128,
+              "data": [
+                69,
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "voices": [
+      {
+        "code": "import(\"stdfaust.lib\");\ndeclare name \"Shallow Synth\";\nfreq = hslider(\"freq\",440,20,20000,1);\ngain = hslider(\"gain\",0.5,0,1,0.001);\ngate = button(\"gate\");\nlevel = hslider(\"Level\",0.18,0,0.5,0.001);\nattack = hslider(\"Attack[unit:s]\",0.008,0.001,1,0.001);\nrelease = hslider(\"Release[unit:s]\",0.18,0.01,2,0.01);\ntone = hslider(\"Tone\",0.3,0,1,0.01);\nvoice = (os.osc(freq)*(1-tone)+os.sawtooth(freq)*tone)*gain*level*en.adsr(attack,0.12,0.65,release,gate);\nprocess = voice <: _,_;\n",
+        "values": {},
+        "trim": 1,
+        "basePan": 0
+      }
+    ],
+    "chains": [
+      [
+        {
+          "code": "declare name \"Stereo Utility\";\nimport(\"stdfaust.lib\");\ngain=hslider(\"Gain[unit:dB]\",0,-36,12,0.1):ba.db2linear:si.smoo;\nwidth=hslider(\"Width[unit:%]\",100,0,200,1)*0.01:si.smoo;\nstereo(l,r)=gain*(m+s),gain*(m-s) with {m=(l+r)*0.5;s=(l-r)*0.5*width;};\nprocess=stereo;\n",
+          "values": {},
+          "id": "preview-utility",
+          "kind": "utility",
+          "bypassed": false
+        }
+      ],
+      [],
+      [],
+      []
+    ],
+    "sends": [
+      {
+        "delay": 0,
+        "reverb": 0
+      }
+    ],
+    "buses": [
+      {
+        "level": 1,
+        "muted": false
+      },
+      {
+        "level": 1,
+        "muted": false
+      },
+      {
+        "level": 1,
+        "muted": false
+      }
+    ]
+  }
+}

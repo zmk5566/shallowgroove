@@ -17,7 +17,7 @@ export function harnessOptions({root,env,sessionId,bridgeToken,bridgeURL}){
  const dataRoot=assistantDataRoot(env);
  const childEnv=Object.fromEntries(['PATH','HOME','TMPDIR','LANG','SYSTEMROOT'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]));
  return {profile:'sdk-minimal',dshHome:resolve(dataRoot,'dsh',sessionId),cwd:root,processCwd:root,patches:[resolve(root,'server/shallowgroove.patch.yml')],provider:'deepseek-official',model:env.SHALLOWGROOVE_MODEL||'deepseek-v4-flash',maxTokens:outputTokenBudget(env),reasoningEffort:reasoningEffort(env),initializeTimeoutMs:30000,
-  env:{...childEnv,DEEPSEEK_API_KEY:env.DEEPSEEK_API_KEY??'',DEEPSEEK_BASE_URL:env.DEEPSEEK_BASE_URL??'',DSH_SYSTEM_PROMPT:persona,SHALLOWGROOVE_BRIDGE_TOKEN:bridgeToken,SHALLOWGROOVE_BRIDGE_URL:bridgeURL}};
+  env:{...childEnv,DEEPSEEK_API_KEY:env.DEEPSEEK_API_KEY??'',DEEPSEEK_BASE_URL:/^https:\/\/api\.deepseek\.com(?:\/v1)?\/?$/.test(env.DEEPSEEK_BASE_URL??'')?'https://api.deepseek.com/anthropic':env.DEEPSEEK_BASE_URL??'',DSH_SYSTEM_PROMPT:persona,SHALLOWGROOVE_BRIDGE_TOKEN:bridgeToken,SHALLOWGROOVE_BRIDGE_URL:bridgeURL}};
 }
 export async function prepareHarnessHome(options){
  await mkdir(options.dshHome,{recursive:true});
@@ -47,7 +47,7 @@ export function assistantPlugin(baseEnv={}){
   if(!sameOrigin(req))return json(res,403,{error:'Only same-origin loopback access is allowed'});
   const env={...baseEnv};
   try{
-   if(path==='/api/assistant/status'&&req.method==='GET')return json(res,200,{configured:!!env.DEEPSEEK_API_KEY,keySource:env.SG_KEY_SOURCE??(env.DEEPSEEK_API_KEY?'environment':'none'),model:env.SHALLOWGROOVE_MODEL||'deepseek-v4-flash',token,message:env.DEEPSEEK_API_KEY?'':'DEEPSEEK_API_KEY is not configured'});
+   if(path==='/api/assistant/status'&&req.method==='GET')return json(res,200,{configured:!!env.DEEPSEEK_API_KEY,keySource:env.SG_KEY_SOURCE??(env.DEEPSEEK_API_KEY?'environment':'none'),model:env.SHALLOWGROOVE_MODEL||'deepseek-v4-flash',token,panelIdentity:env.SG_PANEL_ID,message:env.DEEPSEEK_API_KEY?'':'DEEPSEEK_API_KEY is not configured'});
    if(req.method!=='POST')return json(res,405,{error:'POST required'});
    if(path==='/api/assistant/internal'){
     const record=[...sessions.values()].find(s=>`Bearer ${s.secret}`===req.headers.authorization);
@@ -63,7 +63,7 @@ export function assistantPlugin(baseEnv={}){
    const data=await body(req);
    if(path==='/api/assistant/conversations'||path==='/api/assistant/conversation'){
     if(typeof data.scope!=='string'||!data.scope.length)return json(res,400,{error:'Missing project'});
-    return json(res,200,path.endsWith('conversations')?await archive.list(data.scope):await archive.read(data.sessionId,data.scope));
+    return json(res,200,path.endsWith('conversations')?await archive.list(data.all===true?undefined:data.scope):await archive.read(data.sessionId,data.scope));
    }
    if(!uuid(data.sessionId))return json(res,400,{error:'Invalid session ID'});
    if(path==='/api/assistant/result'){
@@ -84,11 +84,16 @@ export function assistantPlugin(baseEnv={}){
    let segmentTimer;
    try{
     if(record.closing)await record.closing;
-    if(record.harness&&record.keyRevision!==env.SG_KEY_REVISION)await close(record);
-    record.keyRevision=env.SG_KEY_REVISION;
+    const fx=data.context.workspace?.view==='vst-effect';
+    if(record.harness&&(record.keyRevision!==env.SG_KEY_REVISION||record.fx!==fx))await close(record);
+    record.keyRevision=env.SG_KEY_REVISION;record.fx=fx;
     if(!record.harness){const address=server.httpServer.address();const port=typeof address==='object'?address.port:0;const options=harnessOptions({root,env,sessionId:data.sessionId,bridgeToken:record.secret,bridgeURL:`http://127.0.0.1:${port}/api/assistant/internal`});const previous=await archive.describe(data.sessionId);
      if(previous&&data.context.conversationProject&&previous.scope!==data.context.conversationProject)throw Error('Conversation belongs to a different project');
      if(previous?.cwd)options.cwd=previous.cwd;
+     if(fx){
+      options.env.SHALLOWGROOVE_FX='1';
+      options.env.DSH_SYSTEM_PROMPT='You are the ShallowGroove Assistant inside one stereo VST effect. Reply in the user language. Discuss questions without editing. Inspect current source and parameters before editing. For explicit design changes propose a complete stereo Faust draft with replace_faust_patch, or choose a library effect. The user clicks Apply edit to compile and audition a draft. Report tool outcomes accurately. Only the current instance is addressable. History may refer to other projects. Never claim to hear audio.';
+     }
      await prepareHarnessHome(options);
      const harness=new DeepSeekHarness(options);
      try{await harness.start();if(record.persisted||previous||await archive.locate(data.sessionId))await harness.resumeSession(data.sessionId);record.harness=harness;}
