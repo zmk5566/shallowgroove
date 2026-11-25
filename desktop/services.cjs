@@ -1,5 +1,5 @@
 const {fork,spawn}=require('node:child_process');
-const {join,delimiter}=require('node:path');
+const {join,resolve,delimiter}=require('node:path');
 
 function track(child){
  child.exited=new Promise(resolve=>{child.once('exit',resolve);child.once('error',resolve);});
@@ -34,10 +34,10 @@ function startMusic({root,resources,dataDirectory,dev=false}){
  child.ready=waitReady(child,accept=>child.once('message',accept));
  return child;
 }
-function startConnect({resources,musicPort,smoke=false}){
- const service=join(resources,'connect-service'),windows=process.platform==='win32';
- const executable=windows?join(service,'python/python.exe'):join(service,'backend/connect-backend/connect-backend');
- const args=[...(windows?[join(service,'desktop/launcher.py')]:[]),'--hexblocks-source',join(service,'shared/frontend/bridge'),'--server',`ws://127.0.0.1:${musicPort}/hexblocks/ws`];
+function startConnect({resources,devRoot,musicPort,smoke=false}){
+ const service=devRoot?resolve(devRoot,'../hexblocks_connect'):join(resources,'connect-service'),windows=process.platform==='win32';
+ const executable=devRoot?join(service,'.venv',windows?'Scripts/python.exe':'bin/python'):windows?join(service,'python/python.exe'):join(service,'backend/connect-backend/connect-backend');
+ const args=[...(devRoot||windows?[join(service,'desktop/launcher.py')]:[]),'--hexblocks-source',(devRoot?resolve(devRoot,'../hexblocks/frontend/bridge'):join(service,'shared/frontend/bridge')),'--server',`ws://127.0.0.1:${musicPort}/hexblocks/ws`];
  if(smoke)args.push('--sim','--id','hexblocks-integrated-smoke');
  const child=track(spawn(executable,args,{cwd:service,windowsHide:true,env:{...process.env,PYTHONUNBUFFERED:'1',PYTHONUTF8:'1'},stdio:['pipe','pipe','pipe']}));
  child.kind='connect';

@@ -3,12 +3,18 @@ import {sourcePath,joinSources} from './music-sources.mjs';
 import {parseFile} from './session.ts';
 import type {Project} from './project';
 export const PROJECT_LIMIT=100*1024*1024;
-export type EditorState={conversationProject?:string;exampleId:string|null;soundSet:'basic'|'period';codeDrafts:Record<string,string>;effectDrafts?:Record<string,string>};
+export type EditorState={performanceVisual?:{mode:'graph'|'stack';selectedNode:string|null;x:number;y:number};workspaceView?:'arrangement'|'session'|'performance';conversationProject?:string;exampleId:string|null;soundSet:'basic'|'period';codeDrafts:Record<string,string>;effectDrafts?:Record<string,string>};
 export function readDocument(text:string){
  if(new TextEncoder().encode(text).length>PROJECT_LIMIT)throw Error('Project exceeds 100 MB');
  const parsed=parseFile(text),raw=JSON.parse(text);
  if(raw.editor!=null&&(typeof raw.editor!=='object'||Array.isArray(raw.editor)))throw Error('Invalid editor metadata');
  const editor:EditorState={exampleId:null,soundSet:'basic',codeDrafts:{},...raw.editor};
+ if(editor.performanceVisual!==undefined){
+  const v=editor.performanceVisual;
+  if(!v||!['graph','stack'].includes(v.mode)||!Number.isFinite(v.x)||!Number.isFinite(v.y))delete editor.performanceVisual;
+  else editor.performanceVisual={mode:v.mode,x:Math.max(0,v.x),y:Math.max(0,v.y),selectedNode:parsed.session.project.performance?.nodes.some(n=>n.id===v.selectedNode)?v.selectedNode:null};
+ }
+ if(editor.workspaceView!==undefined&&!['arrangement','session','performance'].includes(editor.workspaceView))delete editor.workspaceView;
  if(!['basic','period'].includes(editor.soundSet))throw Error('Invalid editor sound set');
  // The session contains its instruments and notes even when its example is no longer installed.
  if(editor.exampleId!==null&&(typeof editor.exampleId!=='string'||!editor.exampleId.length||editor.exampleId.length>200))throw Error('Invalid editor example ID');

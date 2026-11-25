@@ -596,14 +596,23 @@ button.piano-note.dragging { opacity: .25 !important; }
 .track-stereo { flex:none; display:flex; gap:2px; height:19px; width:10px; }
 .track-stereo span { display:flex; align-items:flex-end; width:4px; background:var(--bg); }
 .track-stereo i { width:100%; background:var(--signal); }
-.arrangement .track.unfolded { position:relative; height:calc(var(--track-height) + 145px); flex-basis:calc(var(--track-height) + 145px); }
-.track.unfolded>.track-controls { height:var(--track-height); z-index:1; }
-.track.unfolded>.lane { opacity:.4; }
-.track-envelope { position:absolute; inset:0; pointer-events:none; }
-.track-envelope>.automation-lane { height:100%; background:transparent; }
-.track-envelope .automation-controls { margin-top:var(--track-height); background:var(--surface); pointer-events:auto; }
-.track-envelope .automation-canvas { height:100%; pointer-events:auto; }
-.track-envelope .automation-empty { margin-top:var(--track-height); background:var(--surface); pointer-events:auto; }
+.arrangement .track.unfolded {
+ height:auto; flex:0 0 auto;
+ grid-template-rows:var(--track-height) auto auto;
+}
+.track.unfolded>.track-controls { grid-area:1 / 1; }
+.track.unfolded>.lane,.track-envelope .automation-canvas { grid-area:1 / 2 / -1 / 3; min-height:0; }
+.track.has-envelope>.lane { opacity:.4; }
+.track-envelope,.track-envelope>.automation-lane { display:contents; }
+.track-envelope .automation-controls,.track-envelope .automation-empty {
+ grid-area:3 / 1; background:var(--surface); border-right:1px solid var(--line);
+}
+.track-envelope .automation-controls { padding-bottom:0; }
+.track-envelope .automation-canvas { height:auto; }
+.track-envelope .automation-canvas svg { position:absolute; inset:0; }
+.arrangement-track-mix,.arrangement-buses { position:relative; z-index:1; flex:none; min-width:0; background:var(--surface); }
+.track>.arrangement-track-mix { grid-area:2 / 1; border-right:1px solid var(--line); }
+.arrangement-track-mix:empty,.arrangement-buses:empty { display:none; }
 .automation-baseline { stroke-dasharray:4 4; opacity:.65; }
 
 .envelope-preview { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
@@ -756,3 +765,16 @@ button.piano-note.dragging { opacity: .25 !important; }
 .fx-assistant .assistant-body { min-height:0; }
 .fx-assistant .thread-picker { max-width:calc(100vw - 20px); }
 .fx-assistant .assistant-composer small { display:none; }
+
+.performance-workspace > .workspace-panel:has(#overview-content) .panel-resize-handle { display:none; }
+.view-switch i.performance { border:0;background:radial-gradient(circle at 2px 6px,currentColor 2px,transparent 2.5px),radial-gradient(circle at 12px 2px,currentColor 2px,transparent 2.5px),radial-gradient(circle at 12px 10px,currentColor 2px,transparent 2.5px); }
+.view-switch i.performance::after { left:2px;right:2px;top:3px;transform:rotate(-23deg); }
+.view-switch i.performance::before { content:'';position:absolute;left:2px;right:2px;top:7px;border-top:2px solid;transform:rotate(23deg); }
+
+.performance-device-editor { width:min(560px,90vw);height:min(400px,75vh);padding:28px 0 0;background:var(--panel);color:var(--ink);border:1px solid var(--line); }
+.performance-device-editor::backdrop { background:#0008; }
+.performance-device-editor .editor-close { position:absolute;top:2px;right:3px; }
+.performance-device-editor .device-dock,.performance-device-editor .focused-effect { width:100%;height:100%;min-height:0;margin:0;padding:0;border:0; }
+.performance-device-editor .device-panel,.performance-device-editor .effect-card { width:100%;height:100%;min-width:0;flex:1;border:0; }
+
+.transport .dsp-toggle[aria-pressed=true] { background:var(--signal); color:var(--bg); }

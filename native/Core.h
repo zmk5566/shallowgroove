@@ -26,7 +26,10 @@ struct Parameter {
     float min, max, step, init;
     std::uint32_t id;
 };
-struct Midi { int offset; std::uint8_t status, data1, data2; };
+struct Midi { int offset; std::uint8_t status, data1, data2;
+    // Hardware routes own their voices and carry the input pedal state at note-off.
+    std::uint64_t source=0;
+    bool sustain=false; };
 struct ParameterChange { int offset; std::uint32_t id; float value; };
 std::uint32_t parameterId(std::string_view device, std::string_view address) noexcept;
 

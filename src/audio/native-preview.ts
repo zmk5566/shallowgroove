@@ -157,6 +157,14 @@ export class NativePreview {
  private outputReady=false;
  private pendingDefault?:string;
  private midiIds:string[]=[];
+ private performanceRouteKey='';
+ private performanceRoutes:Array<{deviceId:string;track:number}>=[];
+ setPerformanceMidiRoutes(routes:Array<{deviceId:string;track:number}>){
+  const key=JSON.stringify(routes);
+  if(key===this.performanceRouteKey)return;
+  this.performanceRouteKey=key;this.performanceRoutes=routes;
+  this.send({op:'setPerformanceMidiRoutes',routes});
+ }
  probeRequest=(command:NativeMessage)=>{
   if(this.closed)return Promise.reject(Error('Native session closed'));
   return this.bridge.request(command);
@@ -170,8 +178,12 @@ export class NativePreview {
   this.off=bridge.onEvent(event=>{
    if(this.closed)return;
    if(event.event==='disconnected'||event.event==='deviceLost'||event.event==='error'){this.failed(Error(String(event.error??'Native audio disconnected')));return;}
-   if(event.event==='midi'){
-    if(typeof event.status==='number'&&typeof event.data1==='number'&&typeof event.data2==='number')engine.onNativeMidi?.([event.status,event.data1,event.data2],typeof event.position==='number'?event.position:this.position,typeof event.track==='number'?event.track:undefined);
+   if(event.event==='midi'&&typeof event.status==='number'&&typeof event.data1==='number'&&typeof event.data2==='number'){
+    const data=[event.status,event.data1,event.data2];
+    if(typeof event.track==='number')engine.onNativeMidi?.(data,typeof event.position==='number'?event.position:this.position,event.track);
+    if(typeof event.deviceId==='string'&&engine.onPerformanceMidiControl){
+     engine.onPerformanceMidiControl({deviceId:event.deviceId,data:(event.status>>4)===13?data.slice(0,2):data});
+    }
    }
    const count=this.count;
    if(count&&event.event==='position'&&event.countToken===count.wire.token&&typeof event.countBeat==='number'){
@@ -215,6 +227,7 @@ export class NativePreview {
   const status=await this.bridge.applyOutput({output,position:this.engine.position,graph:nativeGraph(this.engine),monitor:this.engine.nativeMonitor,midiInputs:this.midiIds});
   if(this.closed||this.engine.native!==this)throw Error('Native session changed');
   this.output={...output};this.readDetails(status);this.hardware.clear();
+  if(this.performanceRoutes.length)await this.bridge.request({op:'setPerformanceMidiRoutes',routes:this.performanceRoutes});
  }
  async applyOutput(output:NativeOutput){
   if(this.closed||!this.outputReady||this.outputPending||this.engine.playing||this.count)throw Error('Stop playback before changing audio output.');
@@ -232,6 +245,7 @@ export class NativePreview {
   if(this.closed)throw Error('Native engine changed while compiling');
   this.hardware.clear();
  }
+ async refreshMidiInputs(){this.readDetails(await this.bridge.request({op:'status'}));}
  async devices(ids:string[],remember=true){const res=await this.bridge.request({op:'setMidiInputs',ids});if(remember)this.midiIds=[...ids];this.readDetails(res);this.readDetails(await this.bridge.request({op:'status'}));}
  send(command:NativeMessage){
   if(!this.closed)void this.bridge.request(command).catch(error=>{if(!this.closed)this.failed(error);});

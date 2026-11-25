@@ -49,3 +49,13 @@ contextBridge.exposeInMainWorld('sgNativeAudio',Object.freeze({
   return ()=>ipcRenderer.removeListener('native-audio:event',listener);
  },
 }));
+
+contextBridge.exposeInMainWorld('sgOsc',Object.freeze({
+ status:()=>ipcRenderer.invoke('osc:status'),
+ configure:value=>ipcRenderer.invoke('osc:configure',value),
+ onMessages:callback=>{
+  const listener=(_event,messages)=>callback(messages);
+  ipcRenderer.on('osc:messages',listener);
+  return ()=>ipcRenderer.removeListener('osc:messages',listener);
+ },
+}));

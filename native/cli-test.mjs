@@ -28,6 +28,13 @@ try{
   await assert.rejects(command('configureOutput',{output:{...defaults,...invalid}}));
  assert.equal((await command('status')).sampleRate,48000);
  await command('load',{preset:{instrument:code,gain:.5}});
+ await command('setPerformanceMidiRoutes',{routes:[{deviceId:'keyboard',track:0},{deviceId:'keyboard',track:1}]});
+ await assert.rejects(command('setPerformanceMidiRoutes',{routes:[{deviceId:'keyboard',track:64}]}));
+ await command('setPerformanceMidiRoutes',{routes:[]});
+ await command('midi',{track:0,status:0x95,data1:64,data2:100});
+ assert.ok(peak((await command('render',{frames:256})).left)>.01,'live performance MIDI sounds with transport stopped');
+ await command('midi',{track:0,status:0x85,data1:64,data2:0});
+ assert.equal((await command('status')).playing,false);
  await command('setMonitor',{enabled:true});
  assert.equal((await command('status')).monitoring,true);
  await command('setMonitor',{enabled:false});

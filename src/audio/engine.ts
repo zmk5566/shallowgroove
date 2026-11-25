@@ -31,10 +31,12 @@ export class AudioEngine {
  onNativeOutputPause?:()=>void;
  pauseForOutputChange(){this.onNativeOutputPause?.();this.pause();}
  replayNativeControls(){
+  this.syncPerformanceClock(true);
   this.native?.send({op:'setMonitor',...this.nativeMonitor});
   for(const entry of this.hardwareValues.values())this.nativeHardware(entry.mapping,entry.value);
  }
  onNativeDevices?:()=>void;
+ onPerformanceMidiControl?:(event:{deviceId:string;data:number[]})=>void;
  onNativeMidi?:(data:number[],position:number,track?:number)=>void;
  private nativeChange=0;
  private webWasRunning=false;
@@ -139,7 +141,7 @@ export class AudioEngine {
   }else if(this.playing)this.scheduleAutomation();}
  automationOverrides=new Set<string>();
  private automated=new Map<AudioParam,number>();
- automationTarget(lane:AutomationLane){
+ automationTarget(lane:Pick<AutomationLane,'trackId'|'device'|'address'>){
   if(isTempoTarget(lane))return {param:undefined,control:{address:'bpm',label:'BPM',min:20,max:300,step:.01,init:this.bpm},base:this.bpm,mapValue:(n:number)=>n};
   const index=this.project?.tracks.findIndex(t=>t.id===lane.trackId)??-1;
   const channel=index>=0?index:['delay','reverb','master'].includes(lane.trackId)?lane.trackId as 'delay'|'reverb'|'master':null;
@@ -208,8 +210,55 @@ export class AudioEngine {
   const id=++this.requestId;
   return new Promise((resolve,reject)=>{this.pending.set(id,{resolve,reject});this.worker!.postMessage({id,code,kind});});
  }
+ performanceDsp:boolean|null=null;
+ private dspClock=0;
+ private dspFade=0;
+ private resumeAfterPerformance=false;
+ private dspBeat=0;
+ private nextDspBeat=0;
+ private nativeClockKey='';
+ syncPerformanceClock(force=false){
+  if(this.performanceDsp===null||!this.project)return;
+  const project=this.timingProject??this.project;
+  const meter=musicalPosition(project,secondsToTick(project,this.position)),bpm=this.bpm;
+  if(this.native){
+   const msg={op:'performanceDsp',active:true,enabled:this.performanceDsp,bpm,beats:meter.numerator,unit:meter.denominator,click:this.metronome};
+   const key=JSON.stringify(msg);
+   if(force||key!==this.nativeClockKey){this.nativeClockKey=key;this.native.send(msg);}
+  }else if(this.performanceDsp&&this.context?.state==='running'){
+   const now=this.context.currentTime,interval=60/bpm*4/meter.denominator;
+   if(this.nextDspBeat<now)this.nextDspBeat=now;
+   while(this.nextDspBeat<=now+.055){
+    if(this.metronome)this.clickAt(this.context,this.nextDspBeat,this.dspBeat%meter.numerator===0);
+    this.dspBeat++;this.nextDspBeat+=interval;
+   }
+  }
+ }
+ setPerformanceDsp(state:boolean|null){
+  if(this.performanceDsp===state)return;
+  window.clearInterval(this.dspClock);window.clearTimeout(this.dspFade);
+  if(this.performanceDsp===null)this.resumeAfterPerformance=this.context?.state==='running';
+  this.performanceDsp=state;this.clearClicks();
+  const ctx=this.context;
+  if(state===null){
+   if(this.native)this.native.send({op:'performanceDsp',active:false,enabled:false,bpm:120,beats:4,unit:4});
+   this.stop(false);
+   if(!this.native&&this.resumeAfterPerformance)void this.resumeAudio().catch(error=>{this.lastError=String(error);});
+   return;
+  }
+  if(!this.native&&ctx&&this.master){
+   const gain=this.master.gain;
+   gain.cancelAndHoldAtTime(ctx.currentTime);gain.linearRampToValueAtTime(state?1:0,ctx.currentTime+.008);
+   if(!state)this.dspFade=window.setTimeout(()=>{
+    if(this.performanceDsp===false&&!this.native){this.stop(false);void ctx.suspend().catch(()=>{});}
+   },16);
+  }
+  this.dspBeat=0;this.nextDspBeat=ctx?.currentTime??0;
+  this.syncPerformanceClock(true);
+  if(state)this.dspClock=window.setInterval(()=>this.syncPerformanceClock(),25);
+ }
  async resumeAudio(){
-  if(this.native)return;
+  if(this.native||this.performanceDsp===false)return;
   this.context??=new AudioContext({latencyHint:'interactive'});
   const context=this.context;const isRunning=()=>context.state==='running';if(isRunning())return;
   let timer:ReturnType<typeof setTimeout>|undefined;
@@ -508,7 +557,7 @@ export class AudioEngine {
   this.loop=enabled;this.loopRange=range;this.refreshLoopBounds();this.stoppedPosition=position;
   if(playing)this.beginPlayback(position,.05,this.pausedSlots);
  }
- async play({resume=false,slots=[],lead=.05}:{lead?:number;resume?:boolean;slots?:{track:number;launch:Launch}[]}={}){if(!this.context||!this.voices.length||this.playing||this.native?.outputPending)return;
+ async play({resume=false,slots=[],lead=.05}:{lead?:number;resume?:boolean;slots?:{track:number;launch:Launch}[]}={}){if(this.performanceDsp!==null)throw Error('Leave Performance mode to play the timeline.');if(!this.context||!this.voices.length||this.playing||this.native?.outputPending)return;
   const request=++this.playRequest;await this.resumeAudio();if(request!==this.playRequest)return;
   this.refreshLoopBounds();
   const position=this.stoppedPosition>=this.duration?0:this.stoppedPosition;
@@ -599,6 +648,7 @@ export class AudioEngine {
   }
  }
  monitorMidi(track:number,data:number[]){
+  if(this.performanceDsp===false)return;
   if(this.native){this.native.send({op:'midi',track,status:data[0],data1:data[1],data2:data[2]??0});return;}
   if(!this.context||!this.voices[track])return;
   if(!this.playing)this.master?.gain.setTargetAtTime(1,this.context.currentTime,.005);
@@ -656,5 +706,5 @@ export class AudioEngine {
  }
  level(index:number){const v=this.voices[index];if(!v)return 0;const data=new Float32Array(256);v.analyser.getFloatTimeDomainData(data);return Math.sqrt(data.reduce((s,x)=>s+x*x,0)/data.length);}
  private releaseVoices(){for(const v of this.voices){v.node.disconnect();v.node.destroy();v.output.disconnect();v.gain.disconnect();v.pan.disconnect();v.analyser.disconnect();}this.voices=[];}
- async dispose(){await this.leaveNative();for(const key of this.hardwareValues.keys())this.releaseHardware(key);this.stop(true);this.releaseVoices();this.effects?.dispose();this.effects=null;this.master?.disconnect();this.worker?.terminate();this.worker=null;await this.context?.close();this.context=null;}
+ async dispose(){window.clearInterval(this.dspClock);window.clearTimeout(this.dspFade);await this.leaveNative();for(const key of this.hardwareValues.keys())this.releaseHardware(key);this.stop(true);this.releaseVoices();this.effects?.dispose();this.effects=null;this.master?.disconnect();this.worker?.terminate();this.worker=null;await this.context?.close();this.context=null;}
 }

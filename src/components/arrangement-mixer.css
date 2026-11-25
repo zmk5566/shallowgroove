@@ -1,0 +1,23 @@
+.arr-track-mix { display:grid;grid-template-columns:auto auto 1fr;align-items:center;gap:1px 9px;padding:1px 6px 3px;color:var(--ink);font-size:10px; }
+.arr-track-fader { grid-column:1/-1;display:grid;height:17px;white-space:nowrap;grid-template-columns:2.5em minmax(0,1fr) 7ch;align-items:center;gap:4px; }
+.arr-track-fader output { text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--muted); }
+.arr-track-fader input[type=range] { width:100%;min-width:0;margin:0;min-height:0;height:15px; }
+.arr-send,.arr-bus-fader { display:flex;align-items:center;gap:3px;min-width:0; }
+.arr-dial { position:relative;width:20px;height:20px;border:1px solid var(--muted);border-radius:50% !important;background:var(--bg); }
+.arr-dial i { position:absolute;inset:2px; }
+.arr-dial i::before { content:'';display:block;width:2px;height:6px;margin:auto;background:var(--signal); }
+.arr-dial input[type=range] { position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:ns-resize;touch-action:none; }
+.arr-dial:focus-within { outline:1px solid var(--signal); }
+.arr-track-mix .channel-inspect { justify-self:end; }
+.arr-bus-fader input[type=range] { flex:1;width:0;min-width:25px;margin:0;height:15px; }
+.arr-track-mix .channel-inspect,.arr-bus-mix .channel-inspect { flex:none;position:static;width:19px;height:19px;padding:1px; }
+.arr-bus-mix { display:flex;align-items:center;gap:6px;min-width:0;min-height:24px;padding:1px 5px;border-bottom:1px solid var(--line);background:var(--surface);font-size:10px; }
+.arr-bus-mix [data-action] { flex:none;min-height:18px;padding:1px 4px;font-size:10px;line-height:1; }
+.arr-bus-mix [data-action=fold] { width:16px;border:0; }
+.arr-bus-mix [data-action=select] { width:72px;text-align:left;white-space:nowrap; }
+.arr-bus-mix.selected [data-action=select] { color:var(--bg);background:var(--signal); }
+.arr-bus-mix [data-action=mute][aria-pressed=true] { background:var(--ink);color:var(--bg); }
+.arr-bus-fader { flex:0 1 150px; }
+.arr-bus-mix output { min-width:6ch;text-align:right;font-variant-numeric:tabular-nums; }
+.arr-bus-mix .channel-meter { flex:none;height:18px; }
+@media(max-width:480px) { .arr-bus-mix { gap:3px; }.arr-bus-mix [data-action=select] { width:59px; } }

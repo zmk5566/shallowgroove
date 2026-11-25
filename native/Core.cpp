@@ -81,9 +81,9 @@ struct Control {
 struct Voice {
     Instance dsp;
     float *gate=nullptr,*freq=nullptr,*gain=nullptr,*key=nullptr,*velocity=nullptr;
-    int note=-1, channel=0, quiet=0;
+    int note=-1, channel=0, quiet=0, noteVelocity=0;
     bool released=false, sustained=false;
-    std::uint64_t age=0;
+    std::uint64_t age=0, source=0;
 };
 struct Insert {
     std::string id;
@@ -157,7 +157,7 @@ struct Graph {
     void release(Voice& v) {
         v.sustained=false;v.released=true;*v.gate=0;v.quiet=0;
     }
-    void noteOn(int channel,int note,int vel) {
+    void noteOn(int channel,int note,int vel,std::uint64_t source) {
         if(!instrument)return;
         auto voice=std::find_if(voices.begin(),voices.end(),[](const auto& v){return v.note<0;});
         if(voice==voices.end())voice=std::min_element(voices.begin(),voices.end(),[](const auto& a,const auto& b){
@@ -169,7 +169,7 @@ struct Graph {
             float* scratchOut[]={scratch[0].data(),scratch[1].data()};
             voice->dsp->compute(1,nullptr,scratchOut);
         }
-        voice->note=note;voice->channel=channel;voice->quiet=0;voice->age=++age;voice->sustained=voice->released=false;
+        voice->noteVelocity=vel;voice->source=source;voice->note=note;voice->channel=channel;voice->quiet=0;voice->age=++age;voice->sustained=voice->released=false;
         if(voice->freq)*voice->freq=440.0f*std::exp2((note-69)/12.0f);
         if(voice->key)*voice->key=static_cast<float>(note);
         if(voice->gain)*voice->gain=vel/127.0f;
@@ -178,19 +178,19 @@ struct Graph {
     }
     void midi(const Midi& e) {
         int type=e.status&0xf0, channel=e.status&15, key=e.data1&127, vel=e.data2&127;
-        if(type==0x90 && vel>0){noteOn(channel,key,vel);return;}
+        if(type==0x90 && vel>0){noteOn(channel,key,vel,e.source);return;}
         if(type==0x80 || type==0x90){
             Voice* first=nullptr;
-            for(auto& v:voices)if(v.note==key && v.channel==channel && !v.released && !v.sustained && (!first || v.age<first->age))first=&v;
-            if(first){if(pedal[channel])first->sustained=true;else release(*first);}
+            for(auto& v:voices)if(v.source==e.source && v.note==key && v.channel==channel && !v.released && !v.sustained && (!first || v.age<first->age))first=&v;
+            if(first){if(e.source?e.sustain:pedal[channel])first->sustained=true;else release(*first);}
         }
         if(type==0xb0 && key==64){
-            pedal[channel]=vel>=64;
-            if(!pedal[channel])for(auto& v:voices)if(v.channel==channel && v.sustained)release(v);
+            if(!e.source)pedal[channel]=vel>=64;
+            if(vel<64)for(auto& v:voices)if(v.source==e.source && v.channel==channel && v.sustained)release(v);
         }
         if(type==0xb0 && (key==120 || key==123)){
-            pedal[channel]=false;
-            for(auto& v:voices)if(v.note>=0 && v.channel==channel){release(v);if(key==120)v.note=-1;}
+            if(!e.source)pedal[channel]=false;
+            for(auto& v:voices)if(v.source==e.source && v.note>=0 && v.channel==channel){release(v);if(key==120)v.note=-1;}
         }
     }
     void reset() {
@@ -340,13 +340,19 @@ struct Core::Impl {
         do{rack=current.load();pins[index].store(rack);}while(rack!=current.load());
         return rack;
     }
-    void chase(Graph& graph){
+    void chase(Graph& graph,const Graph* old){
         for(int ch=0;ch<16;++ch){
             graph.pedal[ch]=pedals[ch];
-            for(int key=0;key<128;++key)if(held[ch][key])graph.noteOn(ch,key,held[ch][key]);
+            for(int key=0;key<128;++key)if(held[ch][key])graph.noteOn(ch,key,held[ch][key],0);
+        }
+        if(old)for(const auto& voice:old->voices){
+            if(!voice.source||voice.note<0||voice.released)continue;
+            graph.noteOn(voice.channel,voice.note,voice.noteVelocity,voice.source);
+            if(voice.sustained)graph.midi({0,uint8_t(0x80|voice.channel),uint8_t(voice.note),0,voice.source,true});
         }
     }
     void remember(const Midi& e) {
+        if(e.source)return;
         auto c=e.status&15,k=e.data1&127,v=e.data2&127;
         switch(e.status&0xf0){
             case 0x90: held[c][k]=static_cast<uint8_t>(v);break;
@@ -432,7 +438,7 @@ void Core::render(float* left,float* right,int frames,std::span<const Midi> midi
     Graph* graph=rack?rack->graph():nullptr;
     auto* previous=state.fade?state.pins[1-state.slot].load():nullptr;
     Graph* old=previous?previous->graph():nullptr;
-    if(graph && state.needChase){state.chase(*graph);state.needChase=false;}
+    if(graph && state.needChase){state.chase(*graph,old);state.needChase=false;}
     if(!graph)state.needChase=true;
     auto* probes=state.probes.active()?&state.probes:nullptr;
     size_t m=0,p=0;

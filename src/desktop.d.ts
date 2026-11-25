@@ -4,6 +4,7 @@ export type MusicVersions={branch:string;head:string;remote:string;remoteBranche
 export type VersionCommand={action:'status'|'link'|'fetch'|'init'|'checkpoint'|'preview'|'branch'|'switch'|'pull'|'push'|'remote';name?:string;url?:string;commit?:string;chat?:unknown[]};
 declare global {
  interface Window {
+  sgOsc?: import("./hardware/performance-signals").OscBridge;
   sgNativeAudio?: import("./audio/native-preview").NativeBridge;
   shallowgrooveDesktop?: {
    testAssistantKey:()=>Promise<'ok'|'invalid'|'network'|'storage'>;

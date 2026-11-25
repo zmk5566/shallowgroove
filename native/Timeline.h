@@ -28,6 +28,25 @@ struct Track {
 };
 struct Timeline {
  Metronome metronome;
+ bool performance=false,dsp=false;
+ double outputGain=1,beatPhase=0,performanceBpm=120;
+ int performanceBeat=0,performanceBeats=4,performanceUnit=4;
+ void renderPerformance(float* l,float* r,int n){
+  if(!dsp&&outputGain<=0)return;
+  const double step=performanceBpm*performanceUnit/(240*rate);
+  for(int i=0;i<n;i++){
+   if(dsp&&beatPhase>=1){
+    beatPhase-=1;
+    if(metronome.enabled)metronome.click(performanceBeat==0);
+    performanceBeat=(performanceBeat+1)%performanceBeats;
+   }
+   if(dsp)beatPhase+=step;
+   if(metronome.age>=0)metronome.tone(l+i,r+i,1,rate);
+   outputGain=std::clamp(outputGain+(dsp?1:-1)/(rate*.008),0.,1.);
+   l[i]*=float(outputGain);r[i]*=float(outputGain);
+  }
+  if(!dsp&&outputGain<=0)stop();
+ }
  double rate;
  int64_t frame=0,end=0,loopA=0,loopB=0;
  bool playing=false,loop=false;
@@ -201,6 +220,7 @@ struct Timeline {
  void render(float* outL,float* outR,int total,bool offline=false) {
   std::fill_n(outL,total,0.f);std::fill_n(outR,total,0.f);
   for(int at=0;at<total;){
+   if(performance&&!dsp&&outputGain<=0)return;
    checkEnd();
    int n=std::min(512,total-at);
    const bool rolling=playing&&!metronome.counting();
@@ -225,7 +245,8 @@ struct Timeline {
    }
    if(rolling)for(auto& t:tracks)t.slot.render(sessionFrame,n,t.notes,clipClock());
    mixAudio(outL+at,outR+at,n,offline);
-   metronome.render(outL+at,outR+at,n,rate,frame,rolling);
+   if(performance)renderPerformance(outL+at,outR+at,n);
+   else metronome.render(outL+at,outR+at,n,rate,frame,rolling);
    if(rolling){frame+=n;sessionFrame+=n;}
    at+=n;
   }

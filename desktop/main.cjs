@@ -1,3 +1,4 @@
+require('./log-pipes.cjs')();
 const {app,BrowserWindow,dialog,Menu,Tray,nativeImage,ipcMain}=require('electron');
 const {join}=require('node:path');
 const {startMusic,startConnect,stopService}=require('./services.cjs');
@@ -7,7 +8,7 @@ let language;
 function appLocale(){return language?.current()??'zh-CN';}
 const tr=(zh,en)=>appLocale()==='en'?en:zh;
 let backend,connector,mainWindow,connectWindow,tray,musicPort,connectPort;
-let nativeAudio,audioExport;
+let nativeAudio,audioExport,osc;
 let quitting=false,shutdownComplete=false,connectStarting;
 let projectDirty=false,projectCloseAllowed=false,projectReady=false;
 let connectState={phase:'starting',message:''};
@@ -33,7 +34,7 @@ async function ensureConnect(){
  if(connector&&connector.exitCode===null&&connectState.phase==='running')return;
  connectState={phase:'starting',message:''};
  connectStarting=(async()=>{
-  const child=startConnect({resources:(viteDev&&process.env.SHALLOWGROOVE_DEV_RESOURCES)||process.resourcesPath,musicPort,smoke});connector=child;
+  const child=startConnect({devRoot:viteDev&&!process.env.SHALLOWGROOVE_DEV_RESOURCES?app.getAppPath():undefined,resources:(viteDev&&process.env.SHALLOWGROOVE_DEV_RESOURCES)||process.resourcesPath,musicPort,smoke});connector=child;
   child.on('error',error=>{if(!quitting)connectState={phase:'error',message:redact(error)};});
   child.on('exit',code=>{if(!quitting&&connector===child)connectState={phase:'error',exitCode:code};});
   try{
@@ -112,7 +113,7 @@ else{
   if(projectReady&&!projectCloseAllowed&&mainWindow&&!mainWindow.isDestroyed()){show(mainWindow);mainWindow?.webContents.send('project:action','close');return;}
   quitting=true;
   for(const window of BrowserWindow.getAllWindows())window.hide();
-  void Promise.allSettled([audioExport?.cancel(),nativeAudio?.stop(),stopService(connector),stopService(backend)]).then(()=>{shutdownComplete=true;tray?.destroy();app.quit();});
+  void Promise.allSettled([osc?.close(),audioExport?.cancel(),nativeAudio?.stop(),stopService(connector),stopService(backend)]).then(()=>{shutdownComplete=true;tray?.destroy();app.quit();});
  });
  app.whenReady().then(async()=>{
   const root=app.getAppPath();
@@ -129,6 +130,13 @@ else{
   for(const action of ['list','read','save','open','draft','version','clone'])ipcMain.handle('project:'+action,(event,...args)=>{if(!trusted(event))throw Error('Untrusted window');return projectFiles[action](...args);});
   ipcMain.on('project:dirty',(event,dirty)=>{if(trusted(event)){projectReady=true;projectDirty=!!dirty;projectCloseAllowed=false;mainWindow.setDocumentEdited(projectDirty);}});
   ipcMain.on('project:allow-close',event=>{if(trusted(event)){projectCloseAllowed=true;app.quit();}});
+  osc=require('./osc.cjs').createOscReceiver(app.getPath('userData'),messages=>{
+   if(mainWindow&&!mainWindow.isDestroyed())mainWindow.webContents.send('osc:messages',messages);
+  });
+  for(const action of ['status','configure'])ipcMain.handle('osc:'+action,(event,...args)=>{
+   if(!trusted(event))throw Error('Untrusted window');
+   return osc[action](...args);
+  });
   const engineName=require('./native-audio.cjs').engineName();
   const binary=join(app.isPackaged?join(process.resourcesPath,'runtime','native'):join(app.getAppPath(),'build-native'),engineName);
   audioExport=require('./export-dialog.cjs').createAudioExport({

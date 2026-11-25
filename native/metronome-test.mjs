@@ -38,5 +38,15 @@ try{
  for(const frame of [3000,6000,12000,18000])assert.equal(energy(transition.slice(frame,frame+128)),0);
  await request('stop');
  assert.equal(energy((await request('render',{frames:512})).right),0);
+ const dsp={active:true,enabled:true,bpm:120,beats:4,unit:4,click:true};
+ const stopped=(await request('status')).position;
+ await request('performanceDsp',dsp);
+ const performance=(await request('render',{frames:30000})).left;
+ for(const frame of [0,24000])assert.ok(energy(performance.slice(frame,frame+2000))>.1);
+ assert.equal(energy(performance.slice(3000,24000)),0);
+ assert.equal((await request('status')).position,stopped);
+ await request('performanceDsp',{...dsp,enabled:false});
+ await request('render',{frames:512});
+ assert.equal(energy((await request('render',{frames:30000})).left),0);
  console.log('Native count-in freezes position, beat grid honors offset, loop repeats sample-accurately, toggle and stop silence clicks.');
 }finally{await helper.stop();}

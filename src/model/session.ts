@@ -1,5 +1,6 @@
 import {appVersion,checkProjectVersion} from './project-version.mjs';
 import {libraryKinds} from './effect-library.ts';
+import {validatePerformance} from './performance.ts';
 import {validateScenes} from './scenes.ts';
 import {validateClips} from './clips.ts';
 import {validBpm} from './tempo.ts';
@@ -52,7 +53,7 @@ export function validateSession(value:unknown):asserts value is Session{
  const p=s.project;if(p.timing?.bpm!==undefined)validBpm(p.timing.bpm);validateMappings(p.hardwareMappings);validateAutomation(p.automation,p.timing?.end_tick);if(typeof p.title!=='string'||!p.timing||!finite(p.timing.ppqn,1,32767)||!finite(p.timing.end_tick,0,1e10)||!finite(p.timing.default_tempo_us_per_quarter,1,16777215))fail();
  const ids=new Set();for(const t of p.tracks){if(typeof t.id!=='string'||ids.has(t.id)||typeof t.name!=='string'||!finite(t.midi_channel,1,16)||!Number.isInteger(t.midi_channel)||!finite(t.gain,0,1.5)||!finite(t.pan,-1,1)||typeof t.mute!=='boolean'||typeof t.solo!=='boolean')fail();ids.add(t.id);}
  for(const events of [p.global_events,...p.tracks.map(t=>t.events)]){if(!Array.isArray(events)||events.length>200000)fail();for(const e of events)if(!finite(e.tick,0,p.timing.end_tick)||!finite(e.order,0,1e10)||!Array.isArray(e.data)||!e.data.every(n=>finite(n,0,255))||(e.status!==undefined&&!finite(e.status,128,255)))fail();}
- validateClips(p);validateScenes(p);
+ validateClips(p);validateScenes(p);if(p.performance!==undefined)validatePerformance(p.performance);
  if(!Array.isArray(s.voices)||s.voices.length!==p.tracks.length||!Array.isArray(s.chains)||s.chains.length!==p.tracks.length+3||!Array.isArray(s.sends)||s.sends.length!==p.tracks.length||!Array.isArray(s.buses)||s.buses.length!==3)fail();
  for(const chain of s.chains)if(!Array.isArray(chain)||chain.length>64)fail();
  for(const patch of [...s.voices,...s.chains.flat()]){
@@ -67,7 +68,7 @@ export function validateSession(value:unknown):asserts value is Session{
 export function parseFile(text:string){const f=JSON.parse(text);checkProjectVersion(f);if(f.encoding==='asset-table'){if(!Array.isArray(f.midi)||!Array.isArray(f.sources))throw Error('Invalid assets');const expand=(s:any)=>({...s,project:{...s.project,global_events:f.midi[s.project.global_events],tracks:s.project.tracks.map((t:any)=>({...t,events:f.midi[t.events]}))},voices:s.voices.map((v:any)=>({...v,code:f.sources[v.code]})),chains:s.chains.map((c:any[])=>c.map(v=>({...v,code:f.sources[v.code]})))});f.session=expand(f.session);if(f.history)f.history.entries=f.history.entries.map((e:any)=>({...e,before:expand(e.before),after:expand(e.after)}));}validateSession(f.session);const history=new History();if(f.history){if(!Array.isArray(f.history.entries)||f.history.entries.length>200||!Number.isInteger(f.history.cursor)||f.history.cursor<0||f.history.cursor>f.history.entries.length)throw Error('Invalid history');for(const e of f.history.entries){validateSession(e.before);validateSession(e.after);if(typeof e.label!=='string'||typeof e.time!=='string'||!['user','assistant'].includes(e.source))throw Error('Invalid history entry');}history.entries=f.history.entries;history.cursor=f.history.cursor;const expected=history.cursor?history.entries[history.cursor-1].after:history.entries[0]?.before;if(expected&&JSON.stringify(expected)!==JSON.stringify(f.session))throw Error('History does not match project');}return {session:f.session as Session,history};}
 
 export function describeEdit(before:Session,after:Session){
- const parts:string[]=[];if(before.project.timing.bpm!==after.project.timing.bpm)parts.push(`BPM: ${before.project.timing.bpm??'MIDI'} → ${after.project.timing.bpm??'MIDI'}`);if(JSON.stringify(before.project.automation)!==JSON.stringify(after.project.automation))parts.push('自动化 / Automation');
+ const parts:string[]=[];if(!equalSnapshot(before.project.performance,after.project.performance))parts.push('演奏图 / Performance');if(before.project.timing.bpm!==after.project.timing.bpm)parts.push(`BPM: ${before.project.timing.bpm??'MIDI'} → ${after.project.timing.bpm??'MIDI'}`);if(JSON.stringify(before.project.automation)!==JSON.stringify(after.project.automation))parts.push('自动化 / Automation');
  after.project.tracks.forEach((t,i)=>{const old=before.project.tracks[i];if(!old||old.id!==t.id)return;for(const key of ['gain','pan','mute','solo','name'] as const)if(t[key]!==old[key])parts.push(`CH ${i+1} ${key}: ${old[key]} → ${t[key]}`);const a=after.voices[i],b=before.voices[i];if(a.code!==b.code)parts.push(`CH ${i+1} Faust DSP`);for(const [key,n] of Object.entries(a.values))if(n!==b.values[key])parts.push(`CH ${i+1} ${key.split('/').at(-1)} → ${n}`);if(JSON.stringify(after.sends[i])!==JSON.stringify(before.sends[i]))parts.push(`CH ${i+1} Send A ${after.sends[i].delay} / B ${after.sends[i].reverb}`);});
  after.chains.forEach((chain,i)=>{if(JSON.stringify(chain)!==JSON.stringify(before.chains[i]))parts.push(`${i<after.project.tracks.length?'CH '+(i+1):['A','B','Master'][i-after.project.tracks.length]} FX`);});if(JSON.stringify(after.buses)!==JSON.stringify(before.buses))parts.push('Return / Master');return parts.join(' · ')||'工程修改 / Project edit';
 }
@@ -79,13 +80,16 @@ export function packFile(session:Session,history?:History,conversation?:unknown[
  const source=(code:string)=>{let id=sourceIndex.get(code);if(id===undefined){id=sources.length;sourceIndex.set(code,id);sources.push(code);}return id;};
  // 0.3.12 is the supported baseline for the asset-table format.
  let minAppVersion='0.3.12';
+ let hasPerformance=false;
  const originalEffects=new Set(['compressor','delay','reverb','custom']);
  const pack=(s:Session)=>{
+  if(s.project.performance!==undefined)hasPerformance=true;
   if(s.voices.some(v=>v.libraryRef)||s.chains.some(chain=>chain.some(fx=>fx.libraryRef)))minAppVersion='0.4.1';
   else if(minAppVersion!=='0.4.1'&&s.chains.some(chain=>chain.some(fx=>!originalEffects.has(fx.kind))))minAppVersion='0.4.0';
   else if(minAppVersion==='0.3.12'&&(s.project.clips?.length||s.project.scenes?.length))minAppVersion='0.3.18';
   return {...s,project:{...s.project,global_events:events(s.project.global_events),tracks:s.project.tracks.map(t=>({...t,events:events(t.events)}))},voices:s.voices.map(v=>({...v,code:source(v.code)})),chains:s.chains.map(c=>c.map(f=>({...f,code:source(f.code)})))};
  };
  const current=pack(session),saved=history?{cursor:history.cursor,entries:history.entries.map(e=>({...e,before:pack(e.before),after:pack(e.after)}))}:undefined;
+ if(hasPerformance)minAppVersion='0.6.0-dev.1';
  return {format:'shallowgroove-project',version:1,savedWith:appVersion,minAppVersion,encoding:'asset-table',session:current,...(saved?{history:saved}:{}),midi,sources,...(conversation?{conversation}:{})};
 }

@@ -1,3 +1,4 @@
+import type {PerformanceGraph} from './performance';
 import type {Scene} from './scenes';
 import type {Clip,ClipRef} from './clips';
 import type {HardwareMapping} from './hardware';
@@ -5,7 +6,7 @@ import type {AutomationLane} from './automation';
 export interface MidiEvent {clipRef?:string;tick:number; order:number; kind:string; status?:number; channel?:number; type?:number; data:number[]}
 export interface TrackAnnotation {instrument:string;basis:string;initial_program:{program_zero_based:number;bank_msb:number;bank_lsb:number}|null;program_history:unknown[];rhythm_map:number;note_count:number;pitch_range:number[]|null;role:string|null;role_source:string|null}
 export interface Track {clipRefs?:ClipRef[];user_named?:boolean;annotation?:TrackAnnotation;id:string; name:string; midi_channel:number; events:MidiEvent[]; gain:number; pan:number; mute:boolean; solo:boolean}
-export interface Project {scenes?:Scene[];clips?:Clip[];hardwareMappings?:HardwareMapping[];automation?:AutomationLane[];title:string; schema:string; timing:{bpm?:number;ppqn:number; end_tick:number; default_tempo_us_per_quarter:number}; global_events:MidiEvent[]; tracks:Track[]}
+export interface Project {performance?:PerformanceGraph;scenes?:Scene[];clips?:Clip[];hardwareMappings?:HardwareMapping[];automation?:AutomationLane[];title:string; schema:string; timing:{bpm?:number;ppqn:number; end_tick:number; default_tempo_us_per_quarter:number}; global_events:MidiEvent[]; tracks:Track[]}
 export interface Note {tick:number; end:number; pitch:number; velocity:number}
 export const isTempoTarget=(target:{trackId:string;device:string;address:string})=>target.trackId==='master'&&target.device==='mixer'&&target.address==='bpm';
 export type TempoPoint={tick:number;seconds:number;tempo:number;slope?:number};

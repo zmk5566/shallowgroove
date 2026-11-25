@@ -1,4 +1,5 @@
 #include "Timeline.h"
+#include "MidiCapture.h"
 #include "SessionSchedule.h"
 #include "InspectorJson.h"
 #include "OutputDevice.h"
@@ -7,6 +8,7 @@
 #include <iostream>
 #include <thread>
 #include <future>
+#include <map>
 #include <cstdio>
 #if JUCE_WINDOWS
 #include <io.h>
@@ -56,10 +58,28 @@ struct NativeHost final:juce::AudioIODeviceCallback,juce::MidiInputCallback,juce
  std::vector<std::unique_ptr<juce::MidiInput>> inputs;
  size_t monitorTrack=0;
  bool monitoring=false;
- std::array<std::array<uint8_t,128>,16> monitoredNotes{};
- std::array<bool,16> monitoredPedals{};
+ std::uint64_t nextSource=1;
+ struct Held {
+  std::uint64_t source=0;
+  std::array<std::array<uint8_t,128>,16> notes{};
+  std::array<bool,16> pedals{};
+ };
+ using Route=std::pair<String,size_t>;
+ std::set<Route> performanceRoutes;
+ std::set<String> enabledInputs;
+ std::map<Route,Held> activeRoutes;
  std::atomic<float> outputPeak=0;
- struct Monitored {int track; Midi note;double time;};
+ struct Monitored {
+  int track; Midi note;double time;
+  String controllerDevice;
+  var event()const{
+   auto o=object();put(o,"event","midi");
+   if(track>=0)put(o,"track",track);
+   if(controllerDevice.isNotEmpty())put(o,"deviceId",controllerDevice);
+   put(o,"status",int(note.status));put(o,"data1",int(note.data1));put(o,"data2",int(note.data2));put(o,"position",time);
+   return o;
+  }
+ };
  std::array<Monitored,2048> received{};
  size_t receivedCount=0;
  bool lastPlaying=false;
@@ -161,11 +181,15 @@ struct NativeHost final:juce::AudioIODeviceCallback,juce::MidiInputCallback,juce
    lastPlaying=timeline.playing;count=receivedCount;std::copy_n(received.begin(),count,captured.begin());receivedCount=0;
   }
   if(!position.isVoid())send(position);
-  for(size_t i=0;i<count;++i){const auto& e=captured[i];auto o=object();put(o,"event","midi");put(o,"track",e.track);put(o,"status",int(e.note.status));put(o,"data1",int(e.note.data1));put(o,"data2",int(e.note.data2));put(o,"position",e.time);send(o);}
+  for(size_t i=0;i<count;++i)send(captured[i].event());
   if(!headless&&poll){
    auto available=juce::MidiInput::getAvailableDevices();
    const auto removed=std::erase_if(inputs,[&](const auto& in){return std::none_of(available.begin(),available.end(),[&](const auto& d){return d.identifier==in->getIdentifier();});});
-   if(removed){std::lock_guard guard(lock);releaseMonitor();}
+   if(removed){
+    std::lock_guard guard(lock);
+    enabledInputs.clear();for(auto& in:inputs)enabledInputs.insert(in->getIdentifier());
+    refreshRoutes();
+   }
    auto info=devices();auto key=juce::JSON::toString(info,true);
    if(lastDevices!=key){lastDevices=key;put(info,"event","devices");send(info);}
   }
@@ -186,34 +210,54 @@ struct NativeHost final:juce::AudioIODeviceCallback,juce::MidiInputCallback,juce
    outputPeak.store(peak,std::memory_order_relaxed);
   }
  }
- void releaseMonitor(){
-  if(monitorTrack<timeline.tracks.size()){
-   auto& t=timeline.tracks[monitorTrack];
-   for(int ch=0;ch<16;++ch){
-    if(monitoredPedals[ch])t.live.push_back({0,uint8_t(0xb0|ch),64,0});
-    for(int n=0;n<128;++n)for(int voice=0;voice<monitoredNotes[ch][n];++voice)t.live.push_back({0,uint8_t(0x80|ch),uint8_t(n),0});
-   }
+ void refreshRoutes(){
+  std::set<Route> wanted;
+  for(const auto& id:enabledInputs){
+   if(monitoring&&monitorTrack<timeline.tracks.size())wanted.emplace(id,monitorTrack);
+   for(const auto& route:performanceRoutes)
+    if(route.first==id&&route.second<timeline.tracks.size())wanted.insert(route);
   }
-  monitoredNotes={};monitoredPedals={};
+  std::erase_if(activeRoutes,[&](const auto& entry){
+   const auto& [route,held]=entry;
+   if(wanted.contains(route))return false;
+   auto& live=timeline.tracks[route.second].live;
+   for(int ch=0;ch<16;++ch){
+    if(held.pedals[ch])live.push_back({0,uint8_t(0xb0|ch),64,0,held.source});
+    for(int n=0;n<128;++n)for(int voice=0;voice<held.notes[ch][n];++voice)
+     live.push_back({0,uint8_t(0x80|ch),uint8_t(n),0,held.source});
+   }
+   return true;
+  });
+  for(const auto& route:wanted){
+   auto [it,added]=activeRoutes.try_emplace(route);
+   if(added)it->second.source=nextSource++;
+  }
  }
- void handleIncomingMidiMessage(juce::MidiInput*,const juce::MidiMessage& m)override{
+ void handleIncomingMidiMessage(juce::MidiInput* input,const juce::MidiMessage& m)override{
+  if(input)receiveMidi(input->getIdentifier(),m);
+ }
+ void receiveMidi(const String& id,const juce::MidiMessage& m){
   const int sz=m.getRawDataSize();const auto* bytes=m.getRawData();
   if(sz<1||sz>3||bytes[0]<0x80||bytes[0]>=0xf0)return;
   std::lock_guard guard(lock);
-  if(monitorTrack>=timeline.tracks.size())return;
+  if(!enabledInputs.contains(id))return;
   Midi note{0,bytes[0],uint8_t(sz>1?bytes[1]:0),uint8_t(sz>2?bytes[2]:0)};
-  auto& live=timeline.tracks[monitorTrack].live;
-  if(monitoring){
-   const int ch=note.status&15,type=note.status>>4;
-   bool route=true;
-   auto& owned=monitoredNotes[ch][note.data1];
-   if(type==9&&note.data2)owned=std::min<int>(owned+1,16);
-   else if(type==8||type==9){route=owned>0;if(route)--owned;}
-   if(type==11&&(note.data1==120||note.data1==123))monitoredNotes[ch].fill(0);
-   if(type==11&&note.data1==64)monitoredPedals[ch]=note.data2>=64;
-   if(route){if(live.size()<4096)live.push_back(note);else timeline.tracks[monitorTrack].core->reset();}
+  const int ch=note.status&15,type=note.status>>4;
+  for(auto it=activeRoutes.lower_bound({id,0});it!=activeRoutes.end()&&it->first.first==id;++it){
+   auto& held=it->second;
+   auto& owned=held.notes[ch][note.data1];
+   if(type==9&&note.data2)owned=std::min<int>(owned+1,255);
+   else if(type==8||type==9){if(!owned)continue;--owned;}
+   if(type==11&&(note.data1==120||note.data1==123)){held.notes[ch].fill(0);held.pedals[ch]=false;}
+   if(type==11&&note.data1==64)held.pedals[ch]=note.data2>=64;
+   auto& track=timeline.tracks[it->first.second];
+   auto routed=note;routed.source=held.source;routed.sustain=held.pedals[ch];
+   if(track.live.size()<4096)track.live.push_back(routed);else track.core->reset();
   }
-  if(receivedCount<received.size())received[receivedCount++]={int(monitorTrack),note,timeline.frame/timeline.rate};
+  const int recordTrack=monitoring&&monitorTrack<timeline.tracks.size()?int(monitorTrack):-1;
+  const auto capture=captureMidi(note.status,recordTrack);
+  if(capture.needed()&&receivedCount<received.size())
+   received[receivedCount++]={capture.track,note,timeline.frame/timeline.rate,capture.controller?id:String()};
  }
  void selectInputs(const var& request){
   const auto* ids=request["ids"].getArray();if(!ids)throw std::runtime_error("Missing MIDI input IDs");
@@ -223,8 +267,8 @@ struct NativeHost final:juce::AudioIODeviceCallback,juce::MidiInputCallback,juce
   for(auto& id:wanted)if(std::none_of(inputs.begin(),inputs.end(),[&](auto& in){return in->getIdentifier()==id;})){
    auto in=juce::MidiInput::openDevice(id,this);if(!in)throw std::runtime_error("MIDI input unavailable");added.push_back(std::move(in));
   }
-  auto removed=std::erase_if(inputs,[&](const auto& in){return !wanted.count(in->getIdentifier());});
-  {std::lock_guard guard(lock);if(removed||target!=monitorTrack)releaseMonitor();monitorTrack=target;}
+  std::erase_if(inputs,[&](const auto& in){return !wanted.count(in->getIdentifier());});
+  {std::lock_guard guard(lock);enabledInputs=std::move(wanted);monitorTrack=target;refreshRoutes();}
   for(auto& in:added){in->start();inputs.push_back(std::move(in));}
  }
  void load(const var& q){
@@ -245,7 +289,7 @@ struct NativeHost final:juce::AudioIODeviceCallback,juce::MidiInputCallback,juce
    bus.core=std::make_unique<Core>();bus.core->load(bus.rack,rate);
   }
   next.setupScratch();
-  {std::lock_guard guard(lock);std::swap(next,timeline);receivedCount=0;monitoredNotes={};monitoredPedals={};}
+  {std::lock_guard guard(lock);std::swap(next,timeline);receivedCount=0;activeRoutes.clear();refreshRoutes();}
  }
  void play(const var& q){
   const auto* rows=q["events"].getArray();
@@ -324,12 +368,35 @@ struct NativeHost final:juce::AudioIODeviceCallback,juce::MidiInputCallback,juce
    auto changes=prepareSlots(timeline,q["slots"],at,arrange+(at-origin));
    std::lock_guard guard(lock);publishSlots(timeline,changes);return out;
   }
+  if(op=="performanceDsp"){
+   std::lock_guard guard(lock);
+   const bool active=q["active"],enabled=active&&bool(q["enabled"]);
+   if(active&&timeline.playing)throw std::runtime_error("Stop transport before entering Performance");
+   if(enabled&&!timeline.dsp){timeline.stop();timeline.beatPhase=1;timeline.performanceBeat=0;}
+   timeline.performance=active;timeline.dsp=enabled;
+   if(!active){timeline.stop();timeline.outputGain=1;}
+   timeline.performanceBpm=number(q["bpm"],1,6e7);
+   timeline.performanceBeats=int(number(q["beats"],1,255));timeline.performanceUnit=int(number(q["unit"],1,1024));
+   timeline.metronome.enabled=q["click"];
+   return out;
+  }
   if(op=="metronome"){std::lock_guard guard(lock);timeline.metronome.enabled=q["enabled"];if(!timeline.metronome.enabled&&!timeline.metronome.counting())timeline.metronome.age=-1;return out;}
   if(op=="setMonitor"){
    std::lock_guard guard(lock);bool enable=q["enabled"];
    auto target=size_t(field(q,"track",monitorTrack,0,63));
    if(enable&&target>=timeline.tracks.size())throw std::runtime_error("Unknown monitor track");
-   if(!enable||target!=monitorTrack)releaseMonitor();monitorTrack=target;monitoring=enable;return out;
+   monitorTrack=target;monitoring=enable;refreshRoutes();return out;
+  }
+  if(op=="setPerformanceMidiRoutes"){
+   const auto* routes=q["routes"].getArray();
+   if(!routes)throw std::runtime_error("Missing MIDI routes");
+   std::set<Route> wanted;
+   for(const auto& route:*routes){
+    if(!route["deviceId"].isString()||route["deviceId"].toString().isEmpty())throw std::runtime_error("Missing MIDI device identifier");
+    if(!route["track"].isInt()&&!route["track"].isInt64())throw std::runtime_error("Invalid MIDI track");
+    wanted.emplace(route["deviceId"].toString(),number(route["track"],0,63));
+   }
+   std::lock_guard guard(lock);performanceRoutes=std::move(wanted);refreshRoutes();return out;
   }
   if(op=="setMidiInputs"){selectInputs(q);return devices();}
   if(op=="status"){out=devices();std::lock_guard guard(lock);put(out,"monitoring",monitoring);put(out,"outputPeak",outputPeak.load());put(out,"playing",timeline.playing);put(out,"position",timeline.frame/timeline.rate);put(out,"sessionPosition",timeline.sessionFrame/timeline.rate);put(out,"sessionTick",timeline.clipClock().tick());put(out,"monitorTrack",int(monitorTrack));put(out,"tracks",int(timeline.tracks.size()));return out;}

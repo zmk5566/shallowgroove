@@ -9,6 +9,11 @@ import {DeepSeekSettings} from './components/DeepSeekSettings';
 import {GridMenu} from './components/GridMenu';
 import type {Grid,Division} from './model/arrangement-grid';
 import {clipCommand,workspaceInventory} from './assistant/clip-workspace';
+import {PerformanceView} from './components/PerformanceView';
+import {midiControlKey,updateMidiControlValues,emptyPerformance,editPerformance,type PerformanceEdit} from './model/performance';
+import {PerformanceMidi} from './audio/performance-midi';
+import {ControlDisplay,PerformanceControls,performanceDevices,performanceSensors} from './audio/performance-controls';
+import {inspectWorkspace,workspacePromptSummary} from './assistant/workspace';
 import {SessionView} from './components/SessionView';
 import {createSlotClip,validateScenes,sceneLaunches,sceneRows,type Scene} from './model/scenes';
 import {applyClip,clipEditorProject,clipReferenceCount,copyBars,renameClip,replaceClipEvents,validateClips} from './model/clips';
@@ -30,6 +35,7 @@ import {inspectNotes,editNotes,transposeNotes,noteEditBar,type NoteEdit,type Not
 import {version as appVersion} from '../package.json';
 import {rememberParameter,type ParameterRef,type ParameterEdit} from './model/parameter-focus';
 import {StudioSidebar} from './components/StudioSidebar';
+import {PerformanceSignals,type OscMessage} from './hardware/performance-signals';
 import {useHexblocks} from './hardware/useHexblocks';
 import {HexblocksPanel,type MappingDraft,type MappingOption} from './components/HexblocksPanel';
 import {validateMappings,mappedValue,hardwareKey,type HardwareMapping} from './model/hardware';
@@ -39,14 +45,14 @@ import {AutomationEditor,type AutomationOption} from './components/AutomationEdi
 import {secondsToTick,normalize,validateAutomation,type AutomationLane} from './model/automation';
 import {retainEngine} from './audio/engine-lifetime';
 import {History,canCapture,capture,hydrate,packFile,describeEdit,type Session} from './model/session';
-import {useCallback,useEffect,useEffectEvent,useLayoutEffect,useMemo,useRef,useState} from 'react';
+import {useCallback,useEffect,useEffectEvent,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ComponentProps} from 'react';
 import {AudioEngine,defaultCode,type Control} from './audio/engine';
 import {tickToSeconds,type Project,type Track} from './model/project';
 import {Assistant,type AssistantContext} from './components/Assistant';
 import {finiteRange,resolveChannelTarget,type Selection,type MusicCommand} from './assistant/contracts';
 import {executeMusicCommand} from './assistant/controller';
 import {WorkspacePanel} from './components/WorkspacePanel';
-import {Mixer} from './components/Mixer';
+import {Mixer,ArrangementTrackMix,ArrangementBusMix} from './components/Mixer';
 import type {ChannelTarget} from './audio/effects';
 import {Arrangement} from './components/Arrangement';
 import {TrackInfo} from './components/TrackInfo';
@@ -58,21 +64,67 @@ import {assignedPatch,periodYear,type SoundSet} from './audio/patch-bank';
 const demos=import.meta.glob('../demo-projects/*.json',{import:'default'});
 const descriptorFiles=import.meta.glob('../track-descriptions/*.json',{import:'default'});
 function clock(seconds:number){return `${Math.floor(seconds/60).toString().padStart(2,'0')}:${Math.floor(seconds%60).toString().padStart(2,'0')}`;}
+function LivePerformanceView({display,...props}:Omit<ComponentProps<typeof PerformanceView>,'values'>&{display:ControlDisplay}){
+ const values=useSyncExternalStore(display.subscribe,display.snapshot);
+ return <PerformanceView {...props} values={values}/>;
+}
 export default function App(){
  const [grid,setGrid]=useState<Grid>({mode:'auto',triplet:false});
  const [autoGrid,setAutoGrid]=useState<Division>('1 bar');
  const gridUnit=grid.mode==='auto'?autoGrid:grid.mode;
  const [mixerShare,setMixerShare]=useState<number|null>(null);
- const [workspaceView,setWorkspaceView]=useState<'arrangement'|'session'>('arrangement');
+ type View='arrangement'|'session'|'performance';
+ const [workspaceView,showWorkspace]=useState<View>('arrangement');
+ const [performanceEditor,openPerformanceEditor]=useState(false);
+ const focusedDialog=useRef<HTMLDialogElement>(null);
+ const [signals]=useState(()=>new PerformanceSignals(window.sgOsc));
+ const midiControls=useRef(new Map<string,number>());
+ useLayoutEffect(()=>{if(performanceEditor&&focusedDialog.current&&!focusedDialog.current.open)focusedDialog.current.showModal();},[performanceEditor]);
+
+ type Visual={mode:'graph'|'stack';selectedNode:string|null;viewport:{x:number;y:number;width:number;height:number}};
+ const performanceVisual=useRef<Visual|null>(null);
+ const midiRouting=useRef<{engine:AudioEngine;native:boolean;router:PerformanceMidi}|null>(null);
+ const controlRuntime=useRef<{engine:AudioEngine;runtime:PerformanceControls}|null>(null);
+ const [controlDisplay]=useState(()=>new ControlDisplay());
+ const livePaint=useRef(0);
+ const performancePrompt=useRef<HTMLDialogElement>(null);
+ const pendingEntry=useRef<((accept:boolean)=>void)|null>(null);
+ async function setWorkspaceView(view:View){
+  const current=editorState.current.workspaceView??'arrangement';
+  if(view===current)return true;
+  if(view==='performance'){
+   const dialog=performancePrompt.current;
+   if(!dialog||pendingEntry.current)return false;
+   const generationAtPrompt=generation.current;
+   dialog.returnValue='';
+   const confirmed=await new Promise<boolean>(resolve=>{pendingEntry.current=resolve;dialog.showModal();});
+   if(!confirmed||generation.current!==generationAtPrompt)return false;
+   pausePlayback();resetMidiRouting();engine.current.setMonitorTrack(-1);engine.current.setPerformanceDsp(false);
+  }else if(current==='performance'){
+   resetMidiRouting();engine.current.setPerformanceDsp(null);
+  }
+  openPerformanceEditor(false);
+  editorState.current.workspaceView=view;
+  showWorkspace(view);setCollapsed(c=>({...c,overview:false}));return true;
+ }
+ function rememberVisual(v:Visual){
+  performanceVisual.current=v;
+  editorState.current.performanceVisual={mode:v.mode,selectedNode:v.selectedNode,x:v.viewport.x,y:v.viewport.y};
+ }
  const [slotEditor,setSlotEditor]=useState<{track:string;clip:string|null;scene:string}|null>(null);
  const [focusedRef,setFocusedRef]=useState<string>();
  const [overviewAdjustment,setOverviewAdjustment]=useState(0);
- const [rowSpace,setRowSpace]=useState(800);
+ const [workspaceSize,setWorkspaceSize]=useState({height:824,gap:8});
  const workspace=useRef<HTMLElement|null>(null);
+ const panelCount=workspaceView==='session'?4:workspaceView==='arrangement'?3:1;
+ const rowSpace=Math.max(panelCount*28,workspaceSize.height-(panelCount-1)*workspaceSize.gap);
  const measureWorkspace=useCallback((node:HTMLElement|null)=>{
   workspace.current=node;
   if(!node)return;
-  const observer=new ResizeObserver(([entry])=>{const css=getComputedStyle(node);setRowSpace(Math.max(112,entry.contentRect.height-3*parseFloat(css.rowGap)));});
+  const observer=new ResizeObserver(([entry])=>{
+   const height=entry.contentRect.height,gap=parseFloat(getComputedStyle(node).rowGap)||0;
+   setWorkspaceSize(previous=>previous.height===height&&previous.gap===gap?previous:{height,gap});
+  });
   observer.observe(node);return()=>observer.disconnect();
  },[]);
  const [collapsed,setCollapsed]=useState(()=>{try{const saved=JSON.parse(localStorage.getItem('shallowgroove.panels')??'{}');return {overview:saved?.overview===true,mixer:saved?.mixer===true,devices:saved?.devices===true,notes:saved?.notes===true};}catch{return {overview:false,mixer:false,devices:false,notes:false};}});
@@ -102,7 +154,7 @@ export default function App(){
  const nativeNotice=useRef('');
  const [audioState,setAudioState]=useState('not initialized');
  const [position,setPosition]=useState(0),[levels,setLevels]=useState<StereoLevel[]>([]),[controls,setControls]=useState<Record<number,Control[]>>({}),[values,setValues]=useState<Record<number,Record<string,number>>>({}),[codes,setCodes]=useState<Record<number,string>>({});
- const hexblocks=useHexblocks(async command=>{if(assistantTurn.current||busy)throw Error('Project is busy');const channel=resolveChannelTarget(selected,command.channel,project?.tracks.map(t=>t.id)??[]);return musicCommand({channel,device:command.device??(channel===selected?selectedDevice:'channel')},command,generation.current);});
+ const hexblocks=useHexblocks(async command=>{if(assistantTurn.current||busy)throw Error('Project is busy');const channel=resolveChannelTarget(selected,command.channel,project?.tracks.map(t=>t.id)??[]);return musicCommand({channel,device:command.device??(channel===selected?selectedDevice:'channel')},command,generation.current);},()=>{if(engine.current.project?.performance?.nodes.some(n=>n.kind==='threshold'))applyHardwareFrame();});
  const [versionsOpen,setVersionsOpen]=useState(false),[zipHint,setZipHint]=useState(false),[cloneUrl,setCloneUrl]=useState('');
  const cloneDialog=useRef<HTMLDialogElement>(null);
  const versionSource=useRef<{url:string;commit:string}|undefined>(undefined);
@@ -114,7 +166,7 @@ export default function App(){
  const historyLock=useRef(false),gesture=useRef(false),assistantTurn=useRef(false),origin=useRef<'user'|'assistant'>('user');const [menuTrack,setMenuTrack]=useState<number|null>(null),[rename,setRename]=useState('');const trackDialog=useRef<HTMLDialogElement>(null);const addDialog=useRef<HTMLDialogElement>(null),[newName,setNewName]=useState(''),importInput=useRef<HTMLInputElement>(null);
  const projectInstance=useRef(crypto.randomUUID());
  const editorState=useRef<EditorState>({exampleId:null,soundSet:'basic',codeDrafts:{}});
- const library=useProjectLibrary({snapshot:projectSnapshot,load:loadDocument,example:loadExample,create:createProject,pause:()=>{engine.current.stop();setPlaying(false);}},locale);
+ const library=useProjectLibrary({snapshot:projectSnapshot,load:loadDocument,example:loadExample,create:createProject,pause:()=>{if(engine.current.performanceDsp!==null)engine.current.setPerformanceDsp(false);engine.current.stop();setPlaying(false);}},locale);
  useLayoutEffect(()=>{
   if(workspaceView!=='session')return;
   const mixer=workspace.current?.querySelector<HTMLElement>('.mixer-tracks');
@@ -152,17 +204,19 @@ export default function App(){
   return {...editorState.current,codeDrafts:Object.fromEntries(Object.entries(editorState.current.codeDrafts).filter(([id])=>ids.has(id))),effectDrafts:Object.fromEntries(Object.entries(editorState.current.effectDrafts??{}).filter(([id])=>session.chains.some(chain=>chain.some(fx=>fx.id===id))))};
  }
  async function installProject(replacement:AudioEngine,metadata:EditorState,description:DescriptionFile|null){
+  resetMidiRouting();
   take.current=null;armIntent.current=false;waitingForInput.current=false;setRecordArmed(false);setRecordNotice(null);setRecording(false);setArmed(null);latchedInputs.current.clear();replacement.setMetronome(click);versionSource.current=undefined;setZipHint(false);setIncludeChat(false);setSharedChat([]);const previous=engine.current;previous.pause();
   if(previous.native)await previous.selectNative(false,false);
   try{
    if((await window.sgNativeAudio?.preferences())?.engine==='native')await replacement.selectNative(true);nativeNotice.current='';
   }catch(error){replacement.nativeIssue=String(error);if(nativeNotice.current!==replacement.nativeIssue)replacement.lastError='此工程使用 Web Audio / Using Web Audio for this project: '+replacement.nativeIssue;nativeNotice.current=replacement.nativeIssue;}
+  replacement.setPerformanceDsp(metadata.workspaceView==='performance'?false:null);
   engine.current=replacement;editorState.current=structuredClone(metadata);
   editorState.current.conversationProject??=metadata.exampleId?'example:'+metadata.exampleId:'track:'+(replacement.project?.tracks[0]?.id??crypto.randomUUID());
   setProject(replacement.project!);setReady(true);setSelected(replacement.project!.tracks.length?0:'master');setSelectedDevice('channel');setSlug(metadata.exampleId??'');setSoundSet(metadata.soundSet);setDescriptions(description);
   setCodes(Object.fromEntries(replacement.voices.map((v,i)=>[i,metadata.codeDrafts[replacement.project!.tracks[i].id]??v.code])));
   setControls(Object.fromEntries(replacement.voices.map((v,i)=>[i,replacement.describe(v.node)])));setValues(Object.fromEntries(replacement.voices.map((v,i)=>[i,{...v.values}])));
-  baseline.current=capture(replacement,replacement.project!);generation.current=crypto.randomUUID();projectInstance.current=crypto.randomUUID();setEnvelopes(new Map());setFocusedRef(undefined);setWorkspaceView('arrangement');setSlotEditor(null);recentParameters.current=[];transcript.current=[];setLoop(false);setPlaying(false);setPosition(0);setError('');renderHistory(n=>n+1);
+  baseline.current=capture(replacement,replacement.project!);generation.current=crypto.randomUUID();projectInstance.current=crypto.randomUUID();setEnvelopes(new Map());setFocusedRef(undefined);showWorkspace(metadata.workspaceView??'arrangement');if(metadata.workspaceView==='performance')setCollapsed(c=>({...c,overview:false}));openPerformanceEditor(false);midiControls.current.clear();performanceVisual.current=null;controlDisplay.publish({});setSlotEditor(null);recentParameters.current=[];transcript.current=[];setLoop(false);setPlaying(false);setPosition(0);setError('');renderHistory(n=>n+1);
   await previous.dispose().catch(e=>console.warn('Old audio engine cleanup failed',e));
  }
  async function loadDocument(text:string){
@@ -230,6 +284,7 @@ export default function App(){
  const pollHistory=useEffectEvent(()=>checkpoint());
  useEffect(()=>{const messages=(e:Event)=>{transcript.current=(e as CustomEvent<unknown[]>).detail;};window.addEventListener('shallowgroove-transcript',messages);const timer=setInterval(()=>pollHistory(),700);const down=()=>{gesture.current=true;};const up=()=>{gesture.current=false;setTimeout(()=>pollHistory(),0);};const start=()=>{pollHistory();assistantTurn.current=true;setAssistantWorking(true);origin.current='assistant';};const end=()=>{assistantTurn.current=false;setAssistantWorking(false);origin.current='assistant';};window.addEventListener('pointerdown',down);window.addEventListener('pointerup',up);window.addEventListener('pointercancel',up);window.addEventListener('blur',up);window.addEventListener('shallowgroove-turn-start',start);window.addEventListener('shallowgroove-turn-end',end);return()=>{window.removeEventListener('shallowgroove-transcript',messages);clearInterval(timer);window.removeEventListener('pointerdown',down);window.removeEventListener('pointerup',up);window.removeEventListener('pointercancel',up);window.removeEventListener('blur',up);window.removeEventListener('shallowgroove-turn-start',start);window.removeEventListener('shallowgroove-turn-end',end);};},[]);
  async function restore(next:Session,selection:ChannelTarget='master',preserveTick=false){
+  resetMidiRouting();
   const replacement=new AudioEngine(),old=engine.current;historyLock.current=true;setBusy(true);setError('');
   try{
    const wasNative=!!old.native,wasPlaying=old.playing,oldPos=old.position;
@@ -241,7 +296,7 @@ export default function App(){
     return track>=0?[{...s,track}]:[];
    });
    await replacement.play({resume:true,slots});
-  }old.pause();replacement.setMetronome(click);engine.current=replacement;setProject(replacement.project!);setReady(true);setSelected(selection);setSelectedDevice('channel');setCodes(Object.fromEntries(replacement.voices.map((v,i)=>[i,editorState.current.codeDrafts[replacement.project!.tracks[i].id]??v.code])));setControls(Object.fromEntries(replacement.voices.map((v,i)=>[i,replacement.describe(v.node)])));setValues(Object.fromEntries(replacement.voices.map((v,i)=>[i,{...v.values}])));baseline.current=capture(replacement,replacement.project!);await old.dispose();}
+  }old.pause();replacement.setMetronome(click);replacement.setPerformanceDsp(old.performanceDsp);engine.current=replacement;setProject(replacement.project!);setReady(true);setSelected(selection);setSelectedDevice('channel');setCodes(Object.fromEntries(replacement.voices.map((v,i)=>[i,editorState.current.codeDrafts[replacement.project!.tracks[i].id]??v.code])));setControls(Object.fromEntries(replacement.voices.map((v,i)=>[i,replacement.describe(v.node)])));setValues(Object.fromEntries(replacement.voices.map((v,i)=>[i,{...v.values}])));baseline.current=capture(replacement,replacement.project!);await old.dispose();}
   catch(e){await replacement.dispose();throw e;}finally{historyLock.current=false;setBusy(false);}
  }
  async function travel(direction:number,fromAssistant=false){
@@ -336,13 +391,13 @@ export default function App(){
   if(!e.playing||tick<active.lastTick){finishTake(e.loop?(e.loopRange?.end??e.project!.timing.end_tick):tick);return null;}
   active.lastTick=tick;return tick;
  }
- function silenceInput(){
-  const e=engine.current,i=e.project?.tracks.findIndex(t=>t.id===armed)??-1;
-  if(i>=0){e.monitorMidi(i,[176+e.project!.tracks[i].midi_channel-1,64,0]);if(e.native)e.monitorMidi(i,[176+e.project!.tracks[i].midi_channel-1,123,0]);else e.voices[i]?.node.allNotesOff(true);}
+ function resetMidiRouting(){
+  const previous=midiRouting.current;
+  if(previous){previous.router.stop();previous.engine.native?.setPerformanceMidiRoutes([]);midiRouting.current=null;}
  }
  useEffect(()=>{
-  engine.current.setMonitorTrack(engine.current.project?.tracks.findIndex(t=>t.id===armed)??-1);
- },[armed,project,engine.current]);
+  engine.current.setMonitorTrack(workspaceView==='performance'?-1:engine.current.project?.tracks.findIndex(t=>t.id===armed)??-1);
+ },[armed,project,engine.current,workspaceView]);
  const handleInput=useEffectEvent((data:number[],nativePosition?:number,nativeTrack?:number)=>{
   if(engine.current.native&&nativePosition===undefined)return;
   const e=engine.current,i=e.project?.tracks.findIndex(t=>t.id===armed)??-1;
@@ -351,19 +406,57 @@ export default function App(){
   const track=e.project!.tracks[i];
   let tick=recordingTick();
   if(tick!==null&&nativePosition!==undefined&&Number.isFinite(nativePosition))tick=Math.round(secondsToTick(e.timingProject??e.project!,nativePosition));
-  if(nativePosition===undefined)e.monitorMidi(i,[(data[0]&240)+track.midi_channel-1,...data.slice(1)]);
+
   if(tick!==null&&take.current){if(take.current.canAppend(track))take.current.midi(track,data,tick);
    else{finishTake(tick);notifyRecording('轨道 MIDI 事件已满，录制已结束 / Track MIDI capacity reached. Take saved.');}}
  });
- const midi=useMidiKeyboard(data=>handleInput(data),()=>{if(!engine.current.native){finishTake();silenceInput();}},notifyRecording);
+ const midi=useMidiKeyboard((data,deviceId)=>{
+  if(engine.current.native||!ready||busy||library.manager.state.home||library.manager.state.busy)return;
+  receiveController(deviceId,data);syncMidiRouting().input(deviceId,data);handleInput(data);
+ },id=>{if(!engine.current.native){midiRouting.current?.router.disconnect(id);finishTake();}},notifyRecording);
+ function midiInventory(){
+  return engine.current.native?.details.midiInputs??midi.devices.map(d=>({id:d.id,name:d.name||d.id,enabled:midi.enabled(d.id)}));
+ }
+ function syncMidiRouting(values=controlRuntime.current?.runtime.values??{}){
+  const e=engine.current;
+  if(midiRouting.current?.engine!==e||midiRouting.current.native!==!!e.native){
+   resetMidiRouting();midiRouting.current={engine:e,native:!!e.native,router:new PerformanceMidi((track,data)=>e.monitorMidi(track,data))};
+  }
+  const router=midiRouting.current.router,tracks=e.project?.tracks??[],graph=e.performanceDsp===true?e.project?.performance:undefined;
+  const ids=e.native?[]:midi.devices.filter(d=>midi.enabled(d.id)).map(d=>d.id);
+  const routes=router.sync(graph,tracks,values,graph?.routes?.length?e.bpm:120,ids,e.performanceDsp===null?tracks.findIndex(t=>t.id===armed):-1);
+  e.native?.setPerformanceMidiRoutes(routes);
+  return router;
+ }
+ async function refreshMidiInputs(){
+  try{
+   const native=engine.current.native;
+   if(native)await native.refreshMidiInputs();else await midi.connect();
+   await engine.current.resumeAudio();refreshMixer(n=>n+1);
+  }catch(error){notifyRecording(String(error));}
+ }
+ async function enablePerformanceMidi(id:string){
+  try{
+   const native=engine.current.native;
+   if(native){
+    const ids=[...new Set([...native.details.midiInputs.filter(d=>d.enabled).map(d=>d.id),id])];
+    await native.devices(ids);await window.sgNativeAudio!.savePreferences({midiInputs:ids});
+   }else midi.setEnabled(id,true);
+   await engine.current.resumeAudio();refreshMixer(n=>n+1);
+  }catch(error){notifyRecording(String(error));}
+ }
+ const needsWebMidi=ready&&!engine.current.native&&!!project?.performance?.nodes.some(n=>n.kind==='midi-input'||n.kind==='midi-control');
+ useEffect(()=>{if(needsWebMidi)void midi.connect().catch(e=>notifyRecording(String(e)));},[needsWebMidi]);
+ useEffect(()=>()=>resetMidiRouting(),[]);
  useEffect(()=>{
   const e=engine.current;
   e.onNativeOutputPause=()=>{cancelCount();finishTake();transportRequest.current++;};
+  e.onPerformanceMidiControl=({deviceId,data})=>receiveController(deviceId,data);
   e.onNativeMidi=(data,position,track)=>handleInput(data,position,track);e.onNativeDevices=()=>refreshMixer(n=>n+1);
-  return ()=>{e.onNativeMidi=undefined;e.onNativeDevices=undefined;e.onNativeOutputPause=undefined;};
+  return ()=>{e.onPerformanceMidiControl=undefined;e.onNativeMidi=undefined;e.onNativeDevices=undefined;e.onNativeOutputPause=undefined;};
  },[engine.current]);
  async function armTrack(id:string){
-  if(take.current)return;silenceInput();
+  if(take.current)return;
   if(armed===id){setArmed(null);return;}
   try{if(!engine.current.native)await midi.connect();await engine.current.resumeAudio();setArmed(id);}catch(error){notifyRecording(String(error));}
  }
@@ -391,6 +484,25 @@ export default function App(){
  }
  const hardwareSubscriptions=useRef(new Map<string,number>());
  const hardwareApplied=useRef(new Map<string,{signature:string;input:number;engine:AudioEngine}>());
+ const receiveController=useEffectEvent((deviceId:string,data:number[])=>{
+  const graph=engine.current.project?.performance;
+  if(!graph||!updateMidiControlValues(graph,deviceId,data,midiControls.current))return;
+  if(graph.nodes.some(n=>n.kind==='threshold'))applyHardwareFrame();
+ });
+ const receiveOsc=useEffectEvent((messages:OscMessage[])=>{
+  const graph=engine.current.project?.performance;
+  for(const msg of messages){
+   if(!signals.receive(msg))continue;
+   if(!graph||!ready||busy||library.manager.state.home||library.manager.state.busy||historyLock.current)continue;
+   const trigger=graph.nodes.some(n=>n.kind==='osc-input'&&n.output==='trigger'&&n.address===msg.address&&(n.endpointId??'default')===(msg.endpointId??'default'));
+   if(trigger||graph.nodes.some(n=>n.kind==='threshold'))applyHardwareFrame();
+   if(trigger)midiRouting.current?.router.oscTrigger(msg.address,msg.endpointId);
+  }
+ });
+ useEffect(()=>{
+  const off=window.sgOsc?.onMessages(messages=>receiveOsc(messages));
+  void signals.initialize().catch(e=>setError(String(e)));return off;
+ },[signals]);
  const applyHardwareFrame=useEffectEvent(()=>{
   const keep=new Set<string>(),tick=recordingTick();
   if(ready&&!busy&&!library.manager.state.home&&!library.manager.state.busy&&!historyLock.current&&hexblocks.live.current.active){for(const m of project?.hardwareMappings??[]){if(!m.enabled)continue;const connector=hexblocks.live.current.connectors.find(c=>c.id===m.connectorId&&c.transport.connected),mod=connector?.modules.find(d=>d.uid===m.uid),sample=mod?.channels[m.channel];if(!mod)continue;
@@ -412,15 +524,39 @@ export default function App(){
     }else keep.delete(key);
    }
   }}
+  if(controlRuntime.current?.engine!==engine.current)controlRuntime.current={engine:engine.current,runtime:new PerformanceControls()};
+  const runtime=controlRuntime.current.runtime;
+  const graph=engine.current.project?.performance;
+  const midiActive=ready&&!busy&&!library.manager.state.home&&!library.manager.state.busy&&!historyLock.current;
+  if(!midiActive)resetMidiRouting();
+  if(ready&&!busy&&!library.manager.state.home&&!library.manager.state.busy&&!historyLock.current&&(graph||Object.keys(runtime.values).length)){
+   const now=performance.now();
+   if(midiControls.current.size){
+    const enabled=new Set(midiInventory().filter(d=>d.enabled).map(d=>d.id));
+    const active=new Set(graph?.nodes.flatMap(n=>n.kind==='midi-control'&&enabled.has(n.midiDeviceId)?[midiControlKey(n)]:[]));
+    for(const key of midiControls.current.keys())if(!active.has(key))midiControls.current.delete(key);
+   }
+   runtime.frame(graph??emptyPerformance(),engine.current,hexblocks.live.current.active?hexblocks.live.current.connectors:[],hexblocks.subscribe,keep,now,signals.oscValues,midiControls.current);
+   const router=syncMidiRouting(runtime.values);for(const id of runtime.risingThresholds)router.thresholdTrigger(id);Object.assign(runtime.values,router.pitches,router.intervals,router.readings);
+   if(workspaceView==='performance'&&now-livePaint.current>=65){
+    livePaint.current=now;
+    controlDisplay.publish(runtime.values);
+   }
+  }
+  else if(midiActive&&midiRouting.current)syncMidiRouting();
   for(const key of engine.current.hardwareValues.keys())if(!keep.has(key)){engine.current.releaseHardware(key);hardwareApplied.current.delete(key);}
  });
- useEffect(()=>{const timer=setInterval(()=>applyHardwareFrame(),33);return()=>clearInterval(timer);},[]);
+ useEffect(()=>{const timer=setInterval(()=>{signals.sensors(hexblocks.live.current.active?hexblocks.live.current.connectors:[],hexblocks.subscribe);signals.publish();applyHardwareFrame();},33);return()=>clearInterval(timer);},[]);
  function trackMenu(index:number){if(busy||assistantTurn.current)return;selectChannel(index);setMenuTrack(index);setRename(project!.tracks[index].name);trackDialog.current?.showModal();}
  function menuAction(action:string){trackDialog.current?.close();if(menuTrack!==null)void trackAction(action,menuTrack,action==='rename_track'?rename:undefined).catch(e=>setError(String(e)));}
- useEffect(()=>{if(typeof selected==='number'){document.querySelector(`[data-track="${selected}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});document.querySelector(`[data-channel="${selected}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});}},[selected,project?.tracks.length]);
+ useEffect(()=>{
+  if(workspaceView==='performance')return;
+  const selector=workspaceView==='arrangement'&&typeof selected==='number'?`[data-track="${selected}"]`:`[data-channel="${selected}"]`;
+  document.querySelector(selector)?.scrollIntoView({block:'nearest',inline:'nearest'});
+ },[selected,workspaceView,project?.tracks.length]);
 
- const visibleMeters=useEffectEvent(()=>!library.manager.state.home && (!collapsed.mixer || (!collapsed.overview && workspaceView==='arrangement')));
- useEffect(()=>{const release=retainEngine(engine);const timer=window.setInterval(()=>{const e=engine.current;setPlaying(e.playing);setPosition(e.position);setAudioState(e.native?'Native':e.context?.state??'not initialized');if(e.lastError){setError(e.lastError);e.lastError='';}if(e.native && visibleMeters())e.native.meters.poll();const next=e.native?e.native.meters.levels:e.voices.map(v=>stereoLevel(v.pan));setLevels(old=>old.length===next.length&&next.every(([l,r],i)=>l===old[i][0]&&r===old[i][1])?old:next);},80);return()=>{clearInterval(timer);release();};},[]);
+ const visibleMeters=useEffectEvent(()=>!library.manager.state.home&&(workspaceView==='session'?!collapsed.mixer:workspaceView==='arrangement'&&!collapsed.overview));
+ useEffect(()=>{const release=retainEngine(engine);const timer=window.setInterval(()=>{const e=engine.current;setPlaying(e.playing);setPosition(e.position);setAudioState(e.native?'Native':e.context?.state??'not initialized');if(e.lastError){setError(e.lastError);e.lastError='';}if(e.native && visibleMeters())e.native.meters.poll();if(!visibleMeters())return;const next=e.native?e.native.meters.levels:e.voices.map(v=>stereoLevel(v.pan));setLevels(old=>old.length===next.length&&next.every(([l,r],i)=>l===old[i][0]&&r===old[i][1])?old:next);},80);return()=>{clearInterval(timer);release();};},[]);
  async function initializeAudio(source:Project|null=project,activate=true,preset:SoundSet=soundSet){
   if(!source)throw Error('No project loaded');
   setBusy(true);setError('');
@@ -461,10 +597,17 @@ export default function App(){
    await startTransport(armIntent.current&&workspaceView==='arrangement'||engine.current.metronome);setPlaying(engine.current.playing);
   }catch(e){setError(String(e));}finally{operationBusy.current=false;}
  }
- const togglePlaybackFromKeyboard=useEffectEvent(()=>{if(countRequest.current){pausePlayback();return;}if(library.manager.state.home||library.manager.state.busy||!project||busy||operationBusy.current)return;if(engine.current.playing)pausePlayback();else void play();});
+ async function toggleDsp(){
+  const e=engine.current;
+  if(e.performanceDsp===null||busy||!ready)return;
+  const enabled=!e.performanceDsp;
+  resetMidiRouting();e.setPerformanceDsp(enabled);refreshMixer(n=>n+1);
+  if(enabled)try{await e.resumeAudio();}catch(error){e.setPerformanceDsp(false);refreshMixer(n=>n+1);notifyRecording(String(error));}
+ }
+ const togglePlaybackFromKeyboard=useEffectEvent(()=>{if(engine.current.performanceDsp!==null)return;if(countRequest.current){pausePlayback();return;}if(library.manager.state.home||library.manager.state.busy||!project||busy||operationBusy.current)return;if(engine.current.playing)pausePlayback();else void play();});
  useEffect(()=>{
   function keydown(e:KeyboardEvent){
-   if(e.code!=='Space'||e.isComposing||e.ctrlKey||e.metaKey||e.altKey||e.shiftKey||e.defaultPrevented)return;
+   if(engine.current.performanceDsp!==null||e.code!=='Space'||e.isComposing||e.ctrlKey||e.metaKey||e.altKey||e.shiftKey||e.defaultPrevented)return;
    const target=e.target;
    if(target instanceof HTMLElement&&(target.isContentEditable||target.closest('input,textarea,select,dialog,[role="textbox"]')))return;
    e.preventDefault(); // Prevent scrolling and the focused button's native click.
@@ -498,7 +641,7 @@ export default function App(){
  function parameter(path:string,value:number){if(typeof selected!=='number')return;setSelectedDevice('instrument');engine.current.setParameter(selected,path,value);setValues(s=>({...s,[selected]:{...s[selected],[path]:value}}));}
  function selectChannel(channel:ChannelTarget){setSelected(channel);setSelectedDevice('channel');}
  function selectContext(selection:Selection){setSelected(selection.channel);setSelectedDevice(selection.device);}
- const inventory=useMemo(()=>project?workspaceInventory(project):null,[project]);
+ const inventory=useMemo(()=>project?workspaceInventory(project):null,[project?.tracks,project?.clips,project?.scenes,project?.timing,project?.global_events]);
  function describeSelection(selection:Selection) {
   const channel=selection.channel,track=typeof channel==='number'?project?.tracks[channel]:undefined;
   const assignment=track?assignedPatch(slug,track.id,soundSet):undefined;
@@ -511,7 +654,76 @@ export default function App(){
   const label=`${channelName}${selection.device==='channel'?'':selection.device==='instrument'?` / ${currentInstrumentName}`:` / ${selectedEffect?(selectedEffect.libraryRef?.name??declaredPatchName(selectedEffect.code)??selectedEffect.kind):'Removed patch'}`}`;
   return {label,channel,track,assignment,rack,selectedEffect,voice,currentInstrumentName,description};
  }
- function snapshot(selection:Selection):AssistantContext {
+ function performanceContext(){
+  const graph=engine.current.project?.performance??emptyPerformance();
+  const signalState=signals.snapshot();
+  const osc={...signalState.osc,available:signalState.available,addresses:signalState.rows.filter(r=>r.kind==='osc').map(r=>({endpointId:r.endpointId,address:r.name,args:r.args,time:r.time,types:r.types}))};
+  return {graph,osc,dsp:engine.current.performanceDsp,midiInputs:midiInventory(),devices:performanceDevices(engine.current),sensors:performanceSensors(hexblocks.live.current.connectors),values:controlRuntime.current?.runtime.values??{},visual:{...editorState.current.performanceVisual,...performanceVisual.current,cardWidth:192,coordinates:'Canvas pixels from top left; +x right, +y down.'}};
+ }
+ function applyPerformanceEdit(edit:PerformanceEdit,source:'assistant'|'user'){
+  const p=engine.current.project;
+  if(!p||!canCapture(engine.current,p)||!ready||busy||operationBusy.current||historyLock.current||(source==='user'&&assistantTurn.current))throw Error('Project is busy');
+  const old=p.performance??emptyPerformance();
+  const graph=editPerformance(old,edit);
+  if(edit.op==='put_link'||edit.op==='put_node'){
+   const devices=performanceDevices(engine.current);
+   if(edit.op==='put_node'&&edit.node.kind==='effect'&&!devices.some(d=>d.trackId===edit.node.trackId&&d.device===edit.node.device))throw Error('Select an existing device');
+   for(const link of graph.links.filter(l=>edit.op==='put_link'?l.id===edit.link.id:l.target===edit.node.id)){
+    const n=graph.nodes.find(n=>n.id===link.target)!;
+    const parameter=devices.find(d=>d.trackId===n.trackId&&d.device===n.device)?.parameters.find(p=>p.address===link.address);
+    if(!parameter||Math.min(link.min,link.max)<parameter.min||Math.max(link.min,link.max)>parameter.max)throw Error('Parameter is missing or the range exceeds its bounds');
+   }
+  }
+  if(edit.op==='put_route'&&edit.route.input==='midi'){
+   const target=graph.nodes.find(n=>n.id===edit.route.target);
+   if(!p.tracks.some(t=>t.id===target?.trackId))throw Error('Instrument track unavailable');
+  }
+  const next={...p,performance:graph};
+  const before=capture(engine.current,p);
+  if(baseline.current)history.current.push(baseline.current,before,describeEdit(baseline.current,before),source);
+  engine.current.project=next;setProject(next);
+  if(graph.routes?.length||old.routes?.length){void engine.current.resumeAudio().catch(e=>notifyRecording(String(e)));syncMidiRouting();}
+  const after=capture(engine.current,next);
+  history.current.push(before,after,'Performance · '+edit.op,source);baseline.current=after;renderHistory(n=>n+1);
+  return graph;
+ }
+ async function triggerPerformanceNote(id:string){
+  const e=engine.current,p=e.project;
+  if(!p||!ready||busy||assistantTurn.current||e.performanceDsp!==true)return;
+  try{
+   await e.resumeAudio();
+   if(engine.current===e&&e.project===p)syncMidiRouting().trigger(id);
+  }catch(error){notifyRecording(String(error));}
+ }
+ function setPerformanceParameter(trackId:string,device:string,address:string,value:number){
+  const e=engine.current;
+  if(!e.project||!ready||busy||assistantTurn.current||!Number.isFinite(value))return;
+  const channel=trackId==='master'||trackId==='delay'||trackId==='reverb'?trackId:e.project.tracks.findIndex(t=>t.id===trackId);
+  if(typeof channel==='number'&&channel<0)return;
+  if(device==='instrument'&&typeof channel==='number'){
+   e.setParameter(channel,address,value);
+   setValues(old=>({...old,[channel]:{...old[channel],[address]:value}}));
+  }else{
+   const fx=e.effects?.chain(channel).effects.find(f=>f.id===device);
+   if(!fx)return;
+   e.effects!.setParameter(fx,address,value);
+  }
+  refreshMixer(n=>n+1);checkpoint();
+ }
+ function performanceInput(id:string,value:number){
+  const p=engine.current.project,graph=p?.performance,node=graph?.nodes.find(n=>n.id===id);
+  if(!p||!graph||!node||busy||assistantTurn.current||!Number.isFinite(value))return;
+  if(node.kind!=='knob'&&node.kind!=='retrigger')return;
+  if(node.kind==='retrigger'&&graph.routes?.some(r=>r.target===id&&r.input==='interval'))return;
+  const updated=node.kind==='retrigger'?{...node,[node.timing==='free'?'intervalMs':'division']:value}:{...node,value};
+  const next={...p,performance:editPerformance(graph,{op:'put_node',node:updated})};
+  engine.current.project=next;setProject(next);
+ }
+ function selectPerformanceEffect(trackId:string,device:string){
+  if(project)selectContext({channel:resolveChannelTarget(selected,trackId,project.tracks.map(t=>t.id)),device});
+ }
+ function openPerformanceEffect(trackId:string,device:string){selectPerformanceEffect(trackId,device);openPerformanceEditor(true);}
+ function snapshot(selection:Selection,fullWorkspace=false):AssistantContext {
   const {label,channel,track,assignment,rack,selectedEffect,voice,currentInstrumentName,description}=describeSelection(selection);
   const originalInstrument=!voice||voice.code===assignment?.code;
   const activePatch=selectedEffect?{name:selectedEffect.libraryRef?.name??declaredPatchName(selectedEffect.code)??selectedEffect.kind,kind:selectedEffect.kind,libraryRef:selectedEffect.libraryRef,code:selectedEffect.code,controls:selectedEffect.controls,values:selectedEffect.values,bypassed:selectedEffect.bypassed,wetOnly:selectedEffect.wetOnly}:track?{name:currentInstrumentName,kind:'instrument',libraryRef:voice?.libraryRef,code:voice?.code??assignment?.code,compiled:!!voice,controls:voice?engine.current.describe(voice.node):[],values:voice?Object.fromEntries(engine.current.describe(voice.node).map(c=>[c.address,voice.values[c.address]??c.init])):{},sources:originalInstrument?assignment?.sources:undefined,reference:originalInstrument?(assignment?.patch??descriptions?.faust_instruments['shallow-synth-v1']):undefined}:null;
@@ -525,7 +737,8 @@ export default function App(){
    const {active,pending}=engine.current.liveState(i);
    return [{trackId:track.id,active:active?{sceneId:active.sceneId,clipId:active.clip?.id??null}:null,pending:pending?{sceneId:pending.sceneId,clipId:pending.clip?.id??null}:pending===null?'return_to_arrangement':null}];
   });
-  return {generation:generation.current,projectId:slug,...(slug==='DaisyBell'?{projectNotes:daisyBellNotes[locale]}:{}),conversationProject:editorState.current.conversationProject,selection,workspace:{...inventory,view:workspaceView,editingGrid:{...grid,effective:gridUnit},focus,range:engine.current.loopRange,loopEnabled:engine.current.loop,live},recentParameters:recentParameterContext(),hardware:{connected:hexblocks.connected,active:hexblocks.active,connectors:hexblocks.connectors,mappings:project?.hardwareMappings??[]},viewedAutomation,interactionFocus:viewedAutomation?'automation':focus?'clip':'device',availableChannels:project?.tracks.map((t,i)=>({channel:String(i+1),id:t.id,name:t.user_named?t.name:localize(descriptions?.tracks.find(d=>d.id===t.id)?.name,locale,t.name)})),availableDevices:[...(track?[{id:'instrument',name:currentInstrumentName}]:[]),...(rack?.effects.map(d=>({id:d.id,name:d.libraryRef?.name??declaredPatchName(d.code)??d.kind,libraryRef:d.libraryRef}))??[])],label,channelId:track?.id??channel,noteEditing:track?{available:true,focusedClipReference:ref,linkedEditRule:'Editing a referenced note updates every placement of that clip ID. Forked variations retain their own events.',inspectTool:'inspect_notes',editTool:'edit_notes',transposeTool:'transpose_notes',transformTool:'transform_notes',summaryOption:'inspect_notes summaryOnly:true',units:'clipId supplied: clip-local ticks; otherwise absolute arrangement ticks; pitch 60=C4; velocity 1..127'}:null,trackDescription:description,activePatch,audioReady:ready,audioContextState:engine.current.context?.state??'not initialized',transportScope:'project mix; play does not solo the selected track',playing:engine.current.playing,loop:engine.current.loop,durationSeconds:project?tickToSeconds(engine.current.timingProject??project,project.timing.end_tick):0,history:{undoCount:history.current.cursor,redoCount:history.current.entries.length-history.current.cursor},mixerParameters:ready?engine.current.mixerControls(channel):[],mix:track?{gain:track.gain,pan:track.pan,mute:track.mute,solo:track.solo}:ready?{gain:(channel==='master'?engine.current.effects?.master:engine.current.effects?.returns[channel as 'delay'|'reverb'])?.level,mute:(channel==='master'?engine.current.effects?.master:engine.current.effects?.returns[channel as 'delay'|'reverb'])?.muted}:null,meterMap:project?meterMap(project):[],transportMusicalPosition:project?musicalPosition(project,secondsToTick(engine.current.timingProject??project,engine.current.position)):null,transportPositionSeconds:engine.current.position,transportPositionTick:project?secondsToTick(engine.current.timingProject??project,engine.current.position):0,automation:project?.automation??[],automationOverrides:[...engine.current.automationOverrides],tempo:project?{bpm:ready?engine.current.bpm:bpmAtTick(project,0),source:ready?engine.current.tempoSource:'midi',target:{trackId:'master',device:'mixer',address:'bpm'},automation:project.automation?.find(isTempoTarget)??null,override:project.timing.bpm??null,min:MIN_BPM,max:MAX_BPM}:null,timing:project?.timing,timeSignatures:project?.global_events.filter(e=>e.kind==='meta'&&e.type===88),sendAmounts:typeof channel==='number'&&ready?engine.current.effects?.tracks[channel]?.amounts:null,chain:rack?.effects.map(d=>({id:d.id,name:d.libraryRef?.name??declaredPatchName(d.code)??d.kind,libraryRef:d.libraryRef,kind:d.kind,bypassed:d.bypassed,controls:d.controls,values:d.values})),observation:'Source code and parameters only; no recorded audio or spectrum analysis.'};
+  const workspaceContext={...inventory,view:editorState.current.workspaceView??workspaceView,performance:performanceContext(),editingGrid:{...grid,effective:gridUnit},focus,range:engine.current.loopRange,loopEnabled:engine.current.loop,live};
+  return {generation:generation.current,projectId:slug,...(slug==='DaisyBell'?{projectNotes:daisyBellNotes[locale]}:{}),conversationProject:editorState.current.conversationProject,selection,workspace:fullWorkspace?workspaceContext:workspacePromptSummary(workspaceContext),recentParameters:recentParameterContext(),hardware:{connected:hexblocks.connected,active:hexblocks.active,connectors:hexblocks.connectors,mappings:project?.hardwareMappings??[]},viewedAutomation,interactionFocus:workspaceView==='performance'?'performance':viewedAutomation?'automation':focus?'clip':'device',availableChannels:project?.tracks.map((t,i)=>({channel:String(i+1),id:t.id,name:t.user_named?t.name:localize(descriptions?.tracks.find(d=>d.id===t.id)?.name,locale,t.name)})),availableDevices:[...(track?[{id:'instrument',name:currentInstrumentName}]:[]),...(rack?.effects.map(d=>({id:d.id,name:d.libraryRef?.name??declaredPatchName(d.code)??d.kind,libraryRef:d.libraryRef}))??[])],label,channelId:track?.id??channel,noteEditing:track?{available:true,focusedClipReference:ref,linkedEditRule:'Editing a referenced note updates every placement of that clip ID. Forked variations retain their own events.',inspectTool:'inspect_notes',editTool:'edit_notes',transposeTool:'transpose_notes',transformTool:'transform_notes',summaryOption:'inspect_notes summaryOnly:true',units:'clipId supplied: clip-local ticks; otherwise absolute arrangement ticks; pitch 60=C4; velocity 1..127'}:null,trackDescription:description,activePatch,audioReady:ready,audioContextState:engine.current.context?.state??'not initialized',transportScope:'project mix; play does not solo the selected track',playing:engine.current.playing,loop:engine.current.loop,durationSeconds:project?tickToSeconds(engine.current.timingProject??project,project.timing.end_tick):0,history:{undoCount:history.current.cursor,redoCount:history.current.entries.length-history.current.cursor},mixerParameters:ready?engine.current.mixerControls(channel):[],mix:track?{gain:track.gain,pan:track.pan,mute:track.mute,solo:track.solo}:ready?{gain:(channel==='master'?engine.current.effects?.master:engine.current.effects?.returns[channel as 'delay'|'reverb'])?.level,mute:(channel==='master'?engine.current.effects?.master:engine.current.effects?.returns[channel as 'delay'|'reverb'])?.muted}:null,meterMap:project?meterMap(project):[],transportMusicalPosition:project?musicalPosition(project,secondsToTick(engine.current.timingProject??project,engine.current.position)):null,transportPositionSeconds:engine.current.position,transportPositionTick:project?secondsToTick(engine.current.timingProject??project,engine.current.position):0,automation:project?.automation??[],automationOverrides:[...engine.current.automationOverrides],tempo:project?{bpm:ready?engine.current.bpm:bpmAtTick(project,0),source:ready?engine.current.tempoSource:'midi',target:{trackId:'master',device:'mixer',address:'bpm'},automation:project.automation?.find(isTempoTarget)??null,override:project.timing.bpm??null,min:MIN_BPM,max:MAX_BPM}:null,timing:project?.timing,timeSignatures:project?.global_events.filter(e=>e.kind==='meta'&&e.type===88),sendAmounts:typeof channel==='number'&&ready?engine.current.effects?.tracks[channel]?.amounts:null,chain:rack?.effects.map(d=>({id:d.id,name:d.libraryRef?.name??declaredPatchName(d.code)??d.kind,libraryRef:d.libraryRef,kind:d.kind,bypassed:d.bypassed,controls:d.controls,values:d.values})),observation:'Source code and parameters only; no recorded audio or spectrum analysis.'};
  }
  const tempoEdit=useRef<{before:Session;source:'user'|'assistant'}|null>(null);
  function beginTempo(source:'user'|'assistant'='user'){
@@ -576,6 +789,15 @@ export default function App(){
  async function musicCommand(selection:Selection,command:MusicCommand,expectedGeneration:string){
   if(library.manager.state.home||library.manager.state.busy||take.current)throw Error('Project is busy');
   if(generation.current!==expectedGeneration)throw Error('The project changed.');
+  if(command.action==='inspect_workspace')return {result:inspectWorkspace(snapshot(selection,true).workspace,command)};
+  if(command.action==='set_workspace_view'){
+   if(!command.view||!['arrangement','session','performance'].includes(command.view)||recording||countRequest.current)throw Error('Cannot change workspace view now');
+   if(!await setWorkspaceView(command.view))throw Error('View change cancelled');return {result:{view:command.view}};
+  }
+  if(command.action==='edit_performance'){
+   if(!command.edit)throw Error('Missing performance edit');
+   const graph=applyPerformanceEdit(command.edit,'assistant');return {result:{op:command.edit.op,nodeCount:graph.nodes.length,linkCount:graph.links.length,routeCount:graph.routes?.length??0}};
+  }
   if(command.action==='search_effect_library'){
    const entries=[...await listUserPatches(),...factoryEntries(locale==='zh-CN')];
    return {result:searchEffects(entries,command)};
@@ -661,6 +883,7 @@ export default function App(){
   if(command.action==='set_automation'){
    if(busy||!ready)throw Error('Enable audio and wait for compilation first');const channel=resolveChannelTarget(selection.channel,command.channel,project?.tracks.map(t=>t.id)??[]),options=automationOptions(channel).filter(o=>o.valid&&(!command.device||o.lane.device===command.device));const candidates=options.filter(o=>o.lane.address===command.address||o.lane.label.toLowerCase()===command.address?.toLowerCase());if(candidates.length!==1)throw Error('Choose one unambiguous device and parameter from inspect_selection');const lane={...candidates[0].lane,points:command.points??candidates[0].lane.points,mode:command.mode??'read'};validateAutomation([lane],project!.timing.end_tick);editAutomation(lane);if(lane.mode==='read')engine.current.resumeAutomation(lane.id);selectContext({channel,device:lane.device==='mixer'?'channel':lane.device});setEnvelope(channel,true,candidates[0].key);return {selection:{channel,device:lane.device==='mixer'?'channel':lane.device},result:{automation:lane}};
   }
+  if(engine.current.performanceDsp!==null&&['play','pause','stop','launch_scene','launch_clip'].includes(command.action))throw Error('Leave Performance mode to use the arrangement transport.');
   if(command.action==='pause'){pausePlayback();return {result:{playing:false,audioReady:ready,scope:'project',position:engine.current.position}};}
   if(command.action==='stop'){stopPlayback();return {result:{playing:false,audioReady:ready,scope:'project',position:engine.current.position}};}
   if(!project||operationBusy.current||busy)throw Error('The rack is busy.');
@@ -690,7 +913,7 @@ export default function App(){
    }
    const outcome=await executeMusicCommand({engine:engine.current,project,projectId:slug,generation:expectedGeneration,ready,busy,notify:()=>{refreshMixer(v=>v+1);setValues(Object.fromEntries(engine.current.voices.map((v,i)=>[i,{...v.values}])));},setBusy,instrumentChanged:(index,code)=>{delete editorState.current.codeDrafts[engine.current.project!.tracks[index].id];setCodes(c=>({...c,[index]:code}));setControls(c=>({...c,[index]:engine.current.describe(engine.current.voices[index].node)}));}},selection,command);if(outcome.selection)selectContext(outcome.selection);return {...outcome,undo:undefined};}finally{operationBusy.current=false;}
  }
- const [envelopes,setEnvelopes]=useState(new Map<string,{open:boolean;choice:string}>());
+ const [envelopes,setEnvelopes]=useState(new Map<string,{expanded:boolean;open:boolean;choice:string}>());
  function envelopeId(channel:ChannelTarget){return typeof channel==='number'?project?.tracks[channel]?.id:channel;}
  function setEnvelope(channel:ChannelTarget,open:boolean,choice?:string){
   const id=envelopeId(channel);
@@ -700,11 +923,11 @@ export default function App(){
   setEnvelopes(previous=>{
    const saved=previous.get(id);
    const nextChoice=choice??saved?.choice??(preferred?JSON.stringify([preferred.device,preferred.address]):'');
-   return new Map(previous).set(id,{open,choice:nextChoice});
+   return new Map(previous).set(id,{expanded:open||!!saved?.expanded,open,choice:nextChoice});
   });
  }
  const activeEnvelope=envelopes.get(envelopeId(selected)??'');
- const automationOpen=!!activeEnvelope?.open,automationChoice=activeEnvelope?.choice??'';
+ const automationOpen=!!activeEnvelope?.expanded&&activeEnvelope.open,automationChoice=activeEnvelope?.choice??'';
  function automationOptions(channel:ChannelTarget):AutomationOption[]{
   if(!ready||!project)return [];const trackId=typeof channel==='number'?project.tracks[channel]?.id:channel;if(!trackId)return [];
   const instruments=typeof channel==='number'&&engine.current.voices[channel]?[{id:'instrument',controls:engine.current.describe(engine.current.voices[channel].node),values:engine.current.voices[channel].values}]:[];
@@ -810,29 +1033,31 @@ export default function App(){
  const activeCode=engine.current.voices[trackIndex]?.code??assignment.code;
  const activeName=engine.current.voices[trackIndex]?.libraryRef?.name??instrumentName(activeCode,assignment.code,localize(assignment.patch?.name,locale,'Basic Faust synth'),locale==='zh-CN'?'自定义 Faust 音色':'Custom Faust instrument');
  const headerHeight=28;
- const bodySpace=Math.max(0,rowSpace-4*headerHeight);
- const expandedLower=!collapsed.mixer||!collapsed.devices||!collapsed.notes;
+ const hasMixer=workspaceView==='session';
+ const openMixer=hasMixer&&!collapsed.mixer;
+ const bodySpace=Math.max(0,rowSpace-panelCount*headerHeight);
+ const expandedLower=openMixer||!collapsed.devices||!collapsed.notes;
  // Size the utility docks first. Timeline editors share the remaining canvas.
- const mixerBody=collapsed.mixer?0:Math.min(230,bodySpace*.28);
+ const mixerBody=openMixer?Math.min(230,bodySpace*.28):0;
  const devicesBody=collapsed.devices?0:Math.min(194,bodySpace*.23);
  const editorSpace=bodySpace-mixerBody-devicesBody;
  const overviewBody=collapsed.overview?0:editorSpace*(collapsed.notes?1:.52);
  const notesBody=collapsed.notes?0:editorSpace-overviewBody;
  const lowerBody=mixerBody+devicesBody+notesBody;
  const overviewMin=headerHeight+Math.min(90,bodySpace*.18);
- const openLowerCount=[collapsed.mixer,collapsed.devices,collapsed.notes].filter(folded=>!folded).length;
+ const openLowerCount=Number(openMixer)+Number(!collapsed.devices)+Number(!collapsed.notes);
  const overviewMax=headerHeight+bodySpace-openLowerCount*Math.min(70,bodySpace*.15);
  const defaultOverview=headerHeight+overviewBody;
- const overviewHeight=collapsed.overview?headerHeight:Math.max(overviewMin,Math.min(overviewMax,defaultOverview+overviewAdjustment*rowSpace));
- const lowerScale=collapsed.overview||!lowerBody?1:(rowSpace-4*headerHeight-(overviewHeight-headerHeight))/lowerBody;
+ const overviewHeight=collapsed.overview?headerHeight:!expandedLower?headerHeight+bodySpace:Math.max(overviewMin,Math.min(overviewMax,defaultOverview+overviewAdjustment*rowSpace));
+ const lowerScale=collapsed.overview||!lowerBody?1:(bodySpace-(overviewHeight-headerHeight))/lowerBody;
  const dockSpace=(mixerBody+devicesBody)*lowerScale;
- const splitDocks=!collapsed.mixer&&!collapsed.devices&&dockSpace>0;
+ const splitDocks=openMixer&&!collapsed.devices&&dockSpace>0;
  const minDockBody=Math.min(48,dockSpace/3);
  const mixerHeight=headerHeight+(splitDocks&&mixerShare!==null
   ?Math.max(minDockBody,Math.min(dockSpace-minDockBody,dockSpace*mixerShare))
   :mixerBody*lowerScale);
  const devicesHeight=2*headerHeight+dockSpace-mixerHeight;
- const panelRows=[overviewHeight,mixerHeight,devicesHeight,headerHeight+notesBody*lowerScale].map(height=>`${height}px`).join(' ');
+ const panelRows=[overviewHeight,...(hasMixer?[mixerHeight]:[]),devicesHeight,headerHeight+notesBody*lowerScale].map(height=>`${height}px`).join(' ');
  const timingProject=ready?(engine.current.timingProject??project):project;
  const duration=tickToSeconds(timingProject,project.timing.end_tick);
  const activeRef=typeof selected==='number'?project.tracks[selected]?.clipRefs?.find(r=>r.id===focusedRef):undefined;
@@ -841,8 +1066,8 @@ export default function App(){
  const barDigits=String(musicalPosition(project,project.timing.end_tick).bar).length;
  const beatDigits=meterMap(project).reduce((digits,meter)=>Math.max(digits,String(meter.numerator).length),1);
  function renderEnvelope(channel:ChannelTarget){
-  const id=envelopeId(channel),state=id&&envelopes.get(id);
-  if(!state||!state.open||!project)return null;
+  const id=envelopeId(channel),state=id?envelopes.get(id):undefined;
+  if(!state?.expanded||!state.open||!project)return null;
   const options=automationOptions(channel);
   return <AutomationEditor key={id} project={project} timingProject={timingProject} options={options} choice={state.choice}
    onChoice={key=>{
@@ -857,33 +1082,73 @@ export default function App(){
    onResume={laneId=>{engine.current.resumeAutomation(laneId);refreshMixer(n=>n+1);}}
    onClose={()=>setEnvelope(channel,false)} zh={locale==='zh-CN'}/>;
  }
+ function toggleTrack(channel:ChannelTarget){
+  selectChannel(channel);
+  const id=envelopeId(channel);
+  if(!id)return;
+  if(!envelopes.has(id)){setEnvelope(channel,true);return;}
+  setEnvelopes(previous=>{
+   const saved=previous.get(id);
+   return saved?new Map(previous).set(id,{...saved,expanded:!saved.expanded}):previous;
+  });
+ }
+ function showMixAutomation(channel:ChannelTarget,address:string){
+  selectChannel(channel);setEnvelope(channel,true,JSON.stringify(['mixer',address]));
+ }
+ const mixLevels=levels.map(pair=>Math.hypot(...pair)/Math.SQRT2);
+ const mixProps={locale,project:displayProject,engine:engine.current,ready,busy,refresh:()=>refreshMixer(v=>v+1)};
+ function renderTrackMix(index:number){
+  if(workspaceView!=='arrangement')return null;
+  return <ArrangementTrackMix {...mixProps} index={index} onChange={change} onShowAutomation={address=>showMixAutomation(index,address)}/>;
+ }
+ function renderBusMix(){
+  if(workspaceView!=='arrangement')return null;
+  return (['delay','reverb','master'] as const).map(kind=><div key={kind}>
+   <ArrangementBusMix {...mixProps} kind={kind} levels={mixLevels} selected={selected} onSelect={selectChannel}
+    expanded={!!envelopes.get(kind)?.expanded&&!!envelopes.get(kind)?.open} onFold={()=>{
+     selectChannel(kind);setEnvelope(kind,!(envelopes.get(kind)?.expanded&&envelopes.get(kind)?.open));
+    }} onShowAutomation={address=>showMixAutomation(kind,address)}/>
+   {renderEnvelope(kind)}
+  </div>);
+ }
  function openVersions(){projectAction(async()=>{if(!library.manager.state.id&&!await library.manager.save())return;setVersionsOpen(true);setZipHint(false);});}
+ const deviceEditor=<section className="device-dock"><EffectsPanel focused={workspaceView==='performance'} onLibraryApply={applyLibraryPatch} onLibrarySaved={()=>{checkpoint();refreshMixer(n=>n+1);}} drafts={editorState.current.effectDrafts??{}} onDraft={(id,code)=>{editorState.current.effectDrafts??={};if(code===undefined)delete editorState.current.effectDrafts[id];else editorState.current.effectDrafts[id]=code;refreshMixer(n=>n+1);}} engine={engine.current} track={selected} locale={locale} ready={ready} busy={busy} playing={playing} setBusy={setBusy} onError={setError} selectedDevice={selectedDevice} onSelectDevice={setSelectedDevice}>{typeof selected==='number'&&<DevicePanel onInspect={()=>inspectDevice(engine.current,selected,undefined,activeName,locale==='zh-CN')} trackId={project.tracks[selected].id} selected={selectedDevice==='instrument'} onSelect={()=>setSelectedDevice('instrument')} key={project.tracks[selected].id} title={activeName} locale={locale} parameterLabels={engine.current.voices[trackIndex]?.code===assignment.code?(assignment.patch?.parameters??descriptions?.faust_instruments['shallow-synth-v1']?.parameters):undefined} channel={project.tracks[selected].midi_channel} controls={controls[selected]??[]} values={Object.fromEntries((controls[selected]??[]).map(c=>[c.address,engine.current.automationDisplay(project.tracks[selected].id,'instrument',c.address,values[selected]?.[c.address]??c.init)]))} code={codes[selected]??assignedPatch(slug,project.tracks[selected].id,soundSet).code} compiledCode={engine.current.voices[selected]?.code} onCode={s=>{editorState.current.codeDrafts[project.tracks[selected].id]=s;setCodes(c=>({...c,[selected]:s}));}} onParameter={parameter} onCompile={()=>void compile()} busy={busy} ready={ready} playing={playing}/>}</EffectsPanel></section>;
  return <><div className="app studio" inert={libraryBusy}><div className="project-filebar"><button onClick={()=>fileAction('home')}>{locale==='zh-CN'?'← 欢迎页':'← Home'}</button><strong>{library.state.name}{library.state.dirty?' *':''}</strong>{slug==='DaisyBell'&&<DaisyBellNotes zh={locale==='zh-CN'}/>}<span className="project-source">{library.state.source==='example'?'EXAMPLE':window.shallowgrooveDesktop?'LOCAL PROJECT':'BROWSER PROJECT'}</span><button disabled={!ready||busy||assistantTurn.current} onClick={()=>fileAction('save')} title="Cmd/Ctrl+S">{locale==='zh-CN'?'保存':'Save'}</button><button disabled={!ready||busy||assistantTurn.current} onClick={()=>fileAction('save-as')}>{locale==='zh-CN'?'另存为…':'Save as…'}</button><button disabled={!ready||busy||assistantTurn.current} onClick={()=>projectAction(exportProject)}>{locale==='zh-CN'?'导出 ZIP':'Export ZIP'}</button><button disabled={busy||assistantTurn.current} onClick={()=>importInput.current?.click()}>{locale==='zh-CN'?'导入':'Import'}</button>{window.shallowgrooveDesktop&&<button disabled={busy||assistantTurn.current} onClick={openVersions}>{locale==='zh-CN'?'版本':'Versions'}</button>}<span role="status" className="project-save-status">{library.state.dirty?(locale==='zh-CN'?'有未保存的修改':'Unsaved changes'):saveStatus}</span><div className="view-switch" role="group" aria-label={locale==='zh-CN'?'工作区视图':'Workspace view'}>
  {engine.current.sessionEngaged&&<button onClick={()=>engine.current.backToArrangement()}>{locale==='zh-CN'?'恢复编曲播放':'Back to arrangement'}</button>}
- {(['arrangement','session'] as const).map(mode=>{const name=mode==='session'?(locale==='zh-CN'?'现场':'Session'):(locale==='zh-CN'?'编曲':'Arrangement');return <button key={mode} title={name} aria-label={name} aria-pressed={workspaceView===mode} disabled={recording||!!countLabel} onClick={()=>{setWorkspaceView(mode);setCollapsed(c=>({...c,overview:false}));}}><i className={mode} aria-hidden="true"/></button>;})}</div></div><header className="transport"><h1>shallowgroove<span>音序 · 声音 · 机架</span></h1><span className="project-title-transport">{library.state.name}</span>
+ {(['arrangement','session','performance'] as const).map(mode=>{const name=mode==='performance'?(locale==='zh-CN'?'演奏':'Performance'):mode==='session'?(locale==='zh-CN'?'现场':'Session'):(locale==='zh-CN'?'编曲':'Arrangement');return <button key={mode} title={name} aria-label={name} aria-pressed={workspaceView===mode} disabled={recording||!!countLabel} onClick={()=>setWorkspaceView(mode)}><i className={mode} aria-hidden="true"/></button>;})}</div></div><header className="transport"><h1>shallowgroove<span>音序 · 声音 · 机架</span></h1><span className="project-title-transport">{library.state.name}</span>
   {periodYear(slug)&&<select aria-label="Sound set" disabled={busy||recording} value={soundSet} onChange={e=>{history.current=new History();baseline.current=null;engine.current.stop();setSoundSet(e.target.value as SoundSet);editorState.current.soundSet=e.target.value as SoundSet;editorState.current.codeDrafts={};setReady(false);generation.current=crypto.randomUUID();setSelectedDevice('channel');setCodes({});setControls({});setValues({});void initializeAudio(project,false,e.target.value as SoundSet).catch(e=>setError(String(e)));}}><option value="period">{periodYear(slug)} · {locale==='zh-CN'?'近似音色':'Inspired patches'}</option><option value="basic">{locale==='zh-CN'?'原基础音色':'Basic synth'}</option></select>}
-  <button aria-label="Undo" disabled={recording||busy||assistantTurn.current||!ready||history.current.cursor===0} onClick={()=>void travel(-1)}>↶</button><button aria-label="Redo" disabled={recording||busy||assistantTurn.current||!ready||history.current.cursor===history.current.entries.length} onClick={()=>void travel(1)}>↷</button><TempoControl bpm={bpmAtTick(timingProject,secondsToTick(timingProject,position))} source={ready?engine.current.tempoSource:undefined} resumable={!!project.automation?.some(l=>isTempoTarget(l)&&l.mode==='off'&&l.points.length)} onResume={()=>{const lane=project.automation?.find(isTempoTarget);if(lane)editAutomation({...lane,mode:'read'});}} overridden={project.timing.bpm!==undefined} disabled={!ready||busy||assistantTurn.current} zh={locale==='zh-CN'} onBegin={()=>beginTempo()} onChange={previewTempo} onFinish={finishTempo}/><div className="transport-buttons"><button className="play" title={loop&&engine.current.loopRange?(locale==='zh-CN'?'从播放头播放；在选区外时从左端开始 · 空格':'Play from cursor, or selection start if outside · Space'):(locale==='zh-CN'?'播放 · 空格':'Play · Space')} aria-keyshortcuts="Space" aria-label="Play" aria-pressed={playing} aria-busy={busy} disabled={busy||playing||!!countLabel} onClick={()=>void play()}>{busy?'…':'▶'}</button><button className="transport-record" disabled={busy||!ready||assistantWorking||workspaceView!=='arrangement'} aria-label="Record arrangement" title={recording?(locale==='zh-CN'?'正在录制 · 点击结束录制':'Recording · click to end take'):recordArmed?(locale==='zh-CN'?'录制已就绪':'Recording armed'):(locale==='zh-CN'?'准备录制编曲':'Arm arrangement recording')} aria-pressed={recordArmed} data-recording={recording} data-counting={!!countLabel&&recordArmed} onClick={toggleRecord}>●</button><button aria-label="Pause" title={locale==='zh-CN'?'暂停 · 保留当前位置 · 空格':'Pause · keep position · Space'} disabled={!playing||busy} onClick={pausePlayback}>Ⅱ</button><button aria-label="Stop" title={locale==='zh-CN'?'停止 · 回到开头':'Stop · return to start'} disabled={busy} onClick={stopPlayback}>■</button><button aria-label="Return to start" title={locale==='zh-CN'?'回到开头':'Return to start'} disabled={busy} onClick={()=>seek(0)}>Ⅰ◀</button><button aria-label="Loop" disabled={recording} title={locale==='zh-CN'?'到达右端后回到左端重复播放':'Repeat from the left boundary at the end'} aria-pressed={loop} className={loop?'active':''} onClick={()=>{engine.current.configureLoop(!loop);setLoop(!loop);}}>↻</button></div><output className="clock" aria-label="Current position" title={locale==='zh-CN'?'小节.拍':'Bar.beat'}><span className="clock-musical"><span className="clock-bar" style={{width:barDigits+'ch'}}>{playheadMeter.bar}</span>.<span style={{width:beatDigits+'ch'}}>{playheadMeter.beat}</span><small> · {playheadMeter.numerator}/{playheadMeter.denominator}</small></span><small className="clock-time">{clock(position)} / {clock(duration)}</small></output><GridMenu grid={grid} auto={autoGrid} zh={locale==='zh-CN'} onChange={setGrid}/><button className="metronome-toggle" aria-label={locale==='zh-CN'?'节拍器':'Metronome'} title={locale==='zh-CN'?'节拍器':'Metronome'} aria-pressed={click} onClick={()=>{engine.current.setMetronome(!click);setClick(!click);}}>
+  <button aria-label="Undo" disabled={recording||busy||assistantTurn.current||!ready||history.current.cursor===0} onClick={()=>void travel(-1)}>↶</button><button aria-label="Redo" disabled={recording||busy||assistantTurn.current||!ready||history.current.cursor===history.current.entries.length} onClick={()=>void travel(1)}>↷</button><TempoControl bpm={bpmAtTick(timingProject,secondsToTick(timingProject,position))} source={ready?engine.current.tempoSource:undefined} resumable={!!project.automation?.some(l=>isTempoTarget(l)&&l.mode==='off'&&l.points.length)} onResume={()=>{const lane=project.automation?.find(isTempoTarget);if(lane)editAutomation({...lane,mode:'read'});}} overridden={project.timing.bpm!==undefined} disabled={!ready||busy||assistantTurn.current} zh={locale==='zh-CN'} onBegin={()=>beginTempo()} onChange={previewTempo} onFinish={finishTempo}/>{workspaceView==='performance'?<button className="dsp-toggle" aria-label="DSP" aria-pressed={engine.current.performanceDsp===true} disabled={!ready||busy||assistantWorking} onClick={()=>void toggleDsp()}>DSP {engine.current.performanceDsp?'ON':'OFF'}</button>:<><div className="transport-buttons"><button className="play" title={loop&&engine.current.loopRange?(locale==='zh-CN'?'从播放头播放；在选区外时从左端开始 · 空格':'Play from cursor, or selection start if outside · Space'):(locale==='zh-CN'?'播放 · 空格':'Play · Space')} aria-keyshortcuts="Space" aria-label="Play" aria-pressed={playing} aria-busy={busy} disabled={busy||playing||!!countLabel} onClick={()=>void play()}>{busy?'…':'▶'}</button><button className="transport-record" disabled={busy||!ready||assistantWorking||workspaceView!=='arrangement'} aria-label="Record arrangement" title={recording?(locale==='zh-CN'?'正在录制 · 点击结束录制':'Recording · click to end take'):recordArmed?(locale==='zh-CN'?'录制已就绪':'Recording armed'):(locale==='zh-CN'?'准备录制编曲':'Arm arrangement recording')} aria-pressed={recordArmed} data-recording={recording} data-counting={!!countLabel&&recordArmed} onClick={toggleRecord}>●</button><button aria-label="Pause" title={locale==='zh-CN'?'暂停 · 保留当前位置 · 空格':'Pause · keep position · Space'} disabled={!playing||busy} onClick={pausePlayback}>Ⅱ</button><button aria-label="Stop" title={locale==='zh-CN'?'停止 · 回到开头':'Stop · return to start'} disabled={busy} onClick={stopPlayback}>■</button><button aria-label="Return to start" title={locale==='zh-CN'?'回到开头':'Return to start'} disabled={busy} onClick={()=>seek(0)}>Ⅰ◀</button><button aria-label="Loop" disabled={recording} title={locale==='zh-CN'?'到达右端后回到左端重复播放':'Repeat from the left boundary at the end'} aria-pressed={loop} className={loop?'active':''} onClick={()=>{engine.current.configureLoop(!loop);setLoop(!loop);}}>↻</button></div><output className="clock" aria-label="Current position" title={locale==='zh-CN'?'小节.拍':'Bar.beat'}><span className="clock-musical"><span className="clock-bar" style={{width:barDigits+'ch'}}>{playheadMeter.bar}</span>.<span style={{width:beatDigits+'ch'}}>{playheadMeter.beat}</span><small> · {playheadMeter.numerator}/{playheadMeter.denominator}</small></span><small className="clock-time">{clock(position)} / {clock(duration)}</small></output><GridMenu grid={grid} auto={autoGrid} zh={locale==='zh-CN'} onChange={setGrid}/></>}<button className="metronome-toggle" aria-label={locale==='zh-CN'?'节拍器':'Metronome'} title={locale==='zh-CN'?'节拍器':'Metronome'} aria-pressed={click} onClick={()=>{engine.current.setMetronome(!click);setClick(!click);}}>
         <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <path d="M10 3h3l4 18H5L10 3Z M6 17h10 M11 17l8-12"/>
           <path d="m15.5 8 3 2" strokeWidth="3"/>
         </svg>
-      </button><select className="count-in-menu" aria-label="Count-in" title={locale==='zh-CN'?'预备拍小节数':'Count-in length'} disabled={!!countLabel||recording} value={countBars} onChange={e=>{const n=Number(e.target.value);setCountBars(n);try{localStorage.setItem('shallowgroove.countInBars',String(n));}catch{}}}>{[0,1,2,4].map(n=><option key={n} value={n}>{locale==='zh-CN'?(n?n+' 小节':'无预备拍'):(n?n+(n===1?' bar':' bars'):'No count-in')}</option>)}</select>{countLabel&&<output className="count-in-display" aria-label="Count-in position">{countLabel}</output>}<button disabled={recording||!!countLabel} onClick={async()=>{setMidiIssue('');setMidiLoading(true);setAudioSettingsOpen(true);midiDialog.current?.showModal();try{if(!window.sgNativeAudio)await midi.connect();}catch(e){setMidiIssue(String(e));}finally{setMidiLoading(false);}}}>{window.sgNativeAudio?(locale==='zh-CN'?'音频 / MIDI':'Audio / MIDI'):(locale==='zh-CN'?'MIDI 设备':'MIDI devices')}</button><dialog onClose={()=>setAudioSettingsOpen(false)} ref={midiDialog} className="versions-dialog"><header><strong>{window.sgNativeAudio?(locale==='zh-CN'?'音频与 MIDI 设置':'Audio and MIDI settings'):(locale==='zh-CN'?'MIDI 输入设备':'MIDI input devices')}</strong><button onClick={()=>midiDialog.current?.close()} aria-label="Close MIDI settings">×</button></header><AudioEngineSettings open={audioSettingsOpen} selectedTrack={typeof selected==='number'?selected:null} onWorking={setBusy} engine={engine.current} disabled={busy||recording||assistantWorking||!!countLabel} zh={locale==='zh-CN'} changed={()=>{setMidiIssue('');refreshMixer(n=>n+1);}}/>{window.sgNativeAudio&&!engine.current.native&&<button disabled={midiLoading} onClick={async()=>{setMidiLoading(true);setMidiIssue('');try{await midi.connect();}catch(e){setMidiIssue(String(e));}finally{setMidiLoading(false);}}}>{locale==='zh-CN'?'检测 MIDI 输入':'Detect MIDI inputs'}</button>}{engine.current.native?<div>
+      </button>{workspaceView!=='performance'&&<select className="count-in-menu" aria-label="Count-in" title={locale==='zh-CN'?'预备拍小节数':'Count-in length'} disabled={!!countLabel||recording} value={countBars} onChange={e=>{const n=Number(e.target.value);setCountBars(n);try{localStorage.setItem('shallowgroove.countInBars',String(n));}catch{}}}>{[0,1,2,4].map(n=><option key={n} value={n}>{locale==='zh-CN'?(n?n+' 小节':'无预备拍'):(n?n+(n===1?' bar':' bars'):'No count-in')}</option>)}</select>}{countLabel&&<output className="count-in-display" aria-label="Count-in position">{countLabel}</output>}<button disabled={recording||!!countLabel} onClick={async()=>{setMidiIssue('');setMidiLoading(true);setAudioSettingsOpen(true);midiDialog.current?.showModal();try{if(!window.sgNativeAudio)await midi.connect();}catch(e){setMidiIssue(String(e));}finally{setMidiLoading(false);}}}>{window.sgNativeAudio?(locale==='zh-CN'?'音频 / MIDI':'Audio / MIDI'):(locale==='zh-CN'?'MIDI 设备':'MIDI devices')}</button><dialog onClose={()=>setAudioSettingsOpen(false)} ref={midiDialog} className="versions-dialog"><header><strong>{window.sgNativeAudio?(locale==='zh-CN'?'音频与 MIDI 设置':'Audio and MIDI settings'):(locale==='zh-CN'?'MIDI 输入设备':'MIDI input devices')}</strong><button onClick={()=>midiDialog.current?.close()} aria-label="Close MIDI settings">×</button></header><AudioEngineSettings open={audioSettingsOpen} selectedTrack={typeof selected==='number'?selected:null} onWorking={setBusy} engine={engine.current} disabled={busy||recording||assistantWorking||!!countLabel} zh={locale==='zh-CN'} changed={()=>{setMidiIssue('');refreshMixer(n=>n+1);}}/>{window.sgNativeAudio&&!engine.current.native&&<button disabled={midiLoading} onClick={async()=>{setMidiLoading(true);setMidiIssue('');try{await midi.connect();}catch(e){setMidiIssue(String(e));}finally{setMidiLoading(false);}}}>{locale==='zh-CN'?'检测 MIDI 输入':'Detect MIDI inputs'}</button>}{engine.current.native?<div>
    {engine.current.native.details.midiInputs.length?engine.current.native.details.midiInputs.map(d=><label key={d.id} className="midi-input-row"><input type="checkbox" disabled={midiLoading} checked={d.enabled} onChange={async e=>{
     const native=engine.current.native;if(!native)return;
     const ids=native.details.midiInputs.filter(i=>i.id===d.id?e.target.checked:i.enabled).map(i=>i.id);
     setMidiLoading(true);setMidiIssue('');
     try{await native.devices(ids);await window.sgNativeAudio!.savePreferences({midiInputs:ids});refreshMixer(n=>n+1);}catch(error){setMidiIssue(String(error));}finally{setMidiLoading(false);}
    }}/>{d.name}</label>):<p>{locale==='zh-CN'?'暂无原生 MIDI 输入设备。':'No native MIDI inputs detected.'}</p>}
-   {midiIssue&&<p role="alert">{midiIssue}</p>}</div>:midiIssue?<p role="alert">{midiIssue}</p>:midiLoading?<p>…</p>:midi.devices.length?midi.devices.map(d=><label className="midi-input-row" key={d.id}><input type="checkbox" checked={midi.enabled(d.id)} onChange={e=>{if(!e.target.checked)silenceInput();midi.setEnabled(d.id,e.target.checked);}}/>{d.name||d.id}{d.manufacturer&&<small>{d.manufacturer}</small>}</label>):<p>{locale==='zh-CN'?'尚未检测到 MIDI 输入。连接键盘后会自动显示。':'Connect a MIDI keyboard to see it here.'}</p>}</dialog><select className="locale-select" aria-label="Language / 语言" value={locale} onChange={e=>setLocale(e.target.value as Locale)}><option value="zh-CN">简体中文</option><option value="en">English</option></select></header>
+   {midiIssue&&<p role="alert">{midiIssue}</p>}</div>:midiIssue?<p role="alert">{midiIssue}</p>:midiLoading?<p>…</p>:midi.devices.length?midi.devices.map(d=><label className="midi-input-row" key={d.id}><input type="checkbox" checked={midi.enabled(d.id)} onChange={e=>{if(!e.target.checked)midiRouting.current?.router.disconnect(d.id);midi.setEnabled(d.id,e.target.checked);}}/>{d.name||d.id}{d.manufacturer&&<small>{d.manufacturer}</small>}</label>):<p>{locale==='zh-CN'?'尚未检测到 MIDI 输入。连接键盘后会自动显示。':'Connect a MIDI keyboard to see it here.'}</p>}</dialog><select className="locale-select" aria-label="Language / 语言" value={locale} onChange={e=>setLocale(e.target.value as Locale)}><option value="zh-CN">简体中文</option><option value="en">English</option></select></header>
+  <dialog ref={performancePrompt} className="project-dialog" aria-labelledby="performance-entry-title" onClose={()=>{
+    const resolve=pendingEntry.current;pendingEntry.current=null;resolve?.(performancePrompt.current?.returnValue==='enter');
+  }}>
+   <h2 id="performance-entry-title">{locale==='zh-CN'?'进入演出模式？':'Enter Performance mode?'}</h2>
+   <p>{playing?(locale==='zh-CN'?'将停止当前播放并保留播放位置。':'Playback will stop at its current position.'):(locale==='zh-CN'?'将切换到演出画布。':'Switch to the Performance canvas.')} {locale==='zh-CN'?'进入后打开 DSP 即可演奏。':'Turn on DSP when you are ready to perform.'}</p>
+   <form method="dialog" className="project-dialog-actions"><button value="cancel" autoFocus>{locale==='zh-CN'?'取消':'Cancel'}</button><button className="primary" value="enter">{playing?(locale==='zh-CN'?'停止并进入':'Stop and enter'):(locale==='zh-CN'?'进入演出模式':'Enter Performance')}</button></form>
+  </dialog>
   {zipHint&&<div className="zip-hint" role="status"><span>{locale==='zh-CN'?'已导入 ZIP。多人协作推荐用远端 Git 同步工程版本。':'ZIP imported. For collaboration, sync project versions with a Git remote.'}</span>{window.shallowgrooveDesktop&&<button onClick={openVersions}>{locale==='zh-CN'?'设置同步':'Set up sync'}</button>}<button onClick={()=>setZipHint(false)}>{locale==='zh-CN'?'知道了':'Dismiss'}</button></div>}
   {(error||library.state.error)&&<div className="error" role="alert">{error||library.state.error}<button aria-label="Dismiss error" onClick={()=>{setError('');library.manager.clearError();}}>×</button></div>}
   {assistantWorking&&<div className="assistant-lock-notice" role="status" aria-live="polite"><span aria-hidden="true">◷</span><span>{locale==='zh-CN'?'请等待AI助手更新完成':'Please wait for the AI assistant to finish updating'}</span></div>}
-  <div className="studio-workspace"><main onContextMenuCapture={clipContextMenu} ref={measureWorkspace} aria-busy={assistantWorking} inert={busy||assistantTurn.current||recording||!!countLabel} className="studio-main" style={{gridTemplateRows:panelRows}}><WorkspacePanel id="overview" title={workspaceView==='session'?(locale==='zh-CN'?'现场':'Session'):locale==='zh-CN'?'轨道总览':'Arrangement'} summary={`${project.tracks.length} TRACKS`} collapsed={collapsed.overview} onToggle={()=>togglePanel('overview')}><section className="overview"><div className="arrangement-view" hidden={workspaceView!=='arrangement'}><Arrangement playing={playing&&workspaceView==='arrangement'&&!collapsed.overview} readPosition={readTransportPosition} armed={armed} onArm={id=>void armTrack(id)} grid={grid} onAuto={setAutoGrid} focusedRef={activeRef?.id} onFocusClip={(index,id)=>{selectChannel(index);setFocusedRef(id);if(id)setCollapsed(c=>({...c,notes:false}));}} clipMenu={<ClipMenu unit={gridUnit} triplet={grid.triplet} project={project} index={typeof selected==='number'?selected:-1} range={engine.current.loopRange} active={activeRef} cursor={secondsToTick(timingProject,position)} zh={locale==='zh-CN'} disabled={busy||!ready} onAction={clipAction}/>} automationChoice={id=>envelopes.get(id)?.choice} onFold={i=>{selectChannel(i);setEnvelope(i,!envelopes.get(project.tracks[i].id)?.open);}} loop={loop} range={engine.current.loopRange} onRange={r=>{engine.current.configureLoop(loop,r);setPosition(engine.current.position);refreshMixer(n=>n+1);}} automationAt={renderEnvelope} busAutomation={typeof selected==='number'?null:renderEnvelope(selected)} onAdd={()=>addDialog.current?.showModal()} onTrackMenu={trackMenu} onSeek={seek} seekingDisabled={busy} locale={locale} project={{...displayProject,timing:timingProject.timing,automation:timingProject.automation}} selected={typeof selected==='number'?selected:-1} onSelect={selectChannel} onChange={change} position={position} duration={duration} levels={levels}/></div>{workspaceView==='session'&&<SessionView project={displayProject} selected={typeof selected==='number'?selected:-1} zh={locale==='zh-CN'} disabled={busy||!ready} onScenes={changeScenes} onCreate={createInSlot} state={i=>engine.current.liveState(i)} focus={slotEditor} onEmpty={(i,scene)=>{const track=project.tracks[i].id;selectChannel(i);setSlotEditor({track,scene:scene.id,clip:null});if(engine.current.playing)void launchScene(scene,track);}} onLaunch={launchScene} onEdit={openSlotEditor}/>}{workspaceView==='arrangement'&&showInfo&&typeof selected==='number'&&<div className="track-context"><button onClick={()=>setShowInfo(false)} aria-label="Close track info">×</button><TrackInfo activeInstrument={activeCode===assignment.code?(assignment.patch??descriptions?.faust_instruments['shallow-synth-v1']):{name:{[locale]:activeName},description:{'zh-CN':'当前自定义 Faust 音色；原始 MIDI 乐器资料仅供参考。',en:'Current custom Faust patch; original MIDI instrument notes are reference only.'}}} track={descriptions?.tracks.find(t=>t.id===project.tracks[selected].id)} file={descriptions} locale={locale}/></div>}</section><PanelResizeHandle value={overviewHeight} min={overviewMin} max={expandedLower?overviewMax:overviewHeight} onChange={height=>setOverviewAdjustment((height-defaultOverview)/rowSpace)} zh={locale==='zh-CN'}/></WorkspacePanel>
-  <WorkspacePanel id="mixer" title={locale==='zh-CN'?'混音台':'Mixer'} summary="A / B / MASTER" collapsed={collapsed.mixer} onToggle={()=>togglePanel('mixer')}><Mixer locale={locale} onAdd={()=>addDialog.current?.showModal()} onTrackMenu={trackMenu} project={displayProject} engine={engine.current} selected={selected} onSelect={selectChannel} onChange={change} ready={ready} busy={busy} levels={levels.map(pair=>typeof pair==='number'?pair:Math.hypot(...pair)/Math.SQRT2)} refresh={()=>refreshMixer(v=>v+1)}/>{splitDocks&&<PanelResizeHandle target="mixer" value={mixerHeight} min={headerHeight+minDockBody} max={headerHeight+dockSpace-minDockBody} onChange={height=>setMixerShare((height-headerHeight)/dockSpace)} zh={locale==='zh-CN'}/>}</WorkspacePanel>
-  <WorkspacePanel id="devices" title={locale==='zh-CN'?'设备链':'Devices'} summary={typeof selected==='number'?`CH ${selected+1}`:selected.toUpperCase()} collapsed={collapsed.devices} onToggle={()=>togglePanel('devices')}><section className="device-dock"><EffectsPanel onLibraryApply={applyLibraryPatch} onLibrarySaved={()=>{checkpoint();refreshMixer(n=>n+1);}} drafts={editorState.current.effectDrafts??{}} onDraft={(id,code)=>{editorState.current.effectDrafts??={};if(code===undefined)delete editorState.current.effectDrafts[id];else editorState.current.effectDrafts[id]=code;refreshMixer(n=>n+1);}} engine={engine.current} track={selected} locale={locale} ready={ready} busy={busy} playing={playing} setBusy={setBusy} onError={setError} selectedDevice={selectedDevice} onSelectDevice={setSelectedDevice}>{typeof selected==='number'&&<DevicePanel onInspect={()=>inspectDevice(engine.current,selected,undefined,activeName,locale==='zh-CN')} trackId={project.tracks[selected].id} selected={selectedDevice==='instrument'} onSelect={()=>setSelectedDevice('instrument')} key={project.tracks[selected].id} title={activeName} locale={locale} parameterLabels={engine.current.voices[trackIndex]?.code===assignment.code?(assignment.patch?.parameters??descriptions?.faust_instruments['shallow-synth-v1']?.parameters):undefined} channel={project.tracks[selected].midi_channel} controls={controls[selected]??[]} values={Object.fromEntries((controls[selected]??[]).map(c=>[c.address,engine.current.automationDisplay(project.tracks[selected].id,'instrument',c.address,values[selected]?.[c.address]??c.init)]))} code={codes[selected]??assignedPatch(slug,project.tracks[selected].id,soundSet).code} compiledCode={engine.current.voices[selected]?.code} onCode={s=>{editorState.current.codeDrafts[project.tracks[selected].id]=s;setCodes(c=>({...c,[selected]:s}));}} onParameter={parameter} onCompile={()=>void compile()} busy={busy} ready={ready} playing={playing}/>}</EffectsPanel></section></WorkspacePanel>
-  <WorkspacePanel id="notes" title={locale==='zh-CN'?'音符编辑':'Notes'} summary={typeof selected==='number'?`CH ${selected+1} · MIDI`:'MIDI'} collapsed={collapsed.notes} onToggle={()=>togglePanel('notes')}>
+  <div className="studio-workspace"><main onContextMenuCapture={clipContextMenu} ref={measureWorkspace} aria-busy={assistantWorking} inert={busy||assistantTurn.current||recording||!!countLabel} className={workspaceView==='performance'?'studio-main performance-workspace':'studio-main'} style={{gridTemplateRows:workspaceView==='performance'?'minmax(0,1fr)':panelRows}}><WorkspacePanel id="overview" title={workspaceView==='performance'?(locale==='zh-CN'?'演奏':'Performance'):workspaceView==='session'?(locale==='zh-CN'?'现场':'Session'):locale==='zh-CN'?'轨道总览':'Arrangement'} summary={workspaceView==='performance'?`${(project.performance?.links.length??0)+(project.performance?.routes?.length??0)} LINKS`:`${project.tracks.length} TRACKS`} collapsed={collapsed.overview} onToggle={()=>togglePanel('overview')}><section className="overview">{workspaceView==='performance'&&<LivePerformanceView key={projectInstance.current} graph={project.performance??emptyPerformance()} zh={locale==='zh-CN'} devices={performanceDevices(engine.current)} sensors={performanceSensors(hexblocks.connectors)} savedSensors={project.hardwareMappings} display={controlDisplay} initialVisual={editorState.current.performanceVisual} onVisualContext={rememberVisual} midiInputs={midiInventory()} onRefreshMidi={()=>void refreshMidiInputs()} onEnableMidi={id=>void enablePerformanceMidi(id)} onEdit={edit=>{try{applyPerformanceEdit(edit,'user');}catch(e){setError(String(e));}}} onInput={performanceInput} onTrigger={triggerPerformanceNote} onParameter={setPerformanceParameter} signals={signals} onSelectEffect={selectPerformanceEffect} onOpenEffect={openPerformanceEffect}/>}{workspaceView!=='performance'&&<div className="arrangement-view" hidden={workspaceView!=='arrangement'}><Arrangement playing={playing&&workspaceView==='arrangement'&&!collapsed.overview} readPosition={readTransportPosition} armed={armed} onArm={id=>void armTrack(id)} grid={grid} onAuto={setAutoGrid} focusedRef={activeRef?.id} onFocusClip={(index,id)=>{selectChannel(index);setFocusedRef(id);if(id)setCollapsed(c=>({...c,notes:false}));}} clipMenu={<ClipMenu unit={gridUnit} triplet={grid.triplet} project={project} index={typeof selected==='number'?selected:-1} range={engine.current.loopRange} active={activeRef} cursor={secondsToTick(timingProject,position)} zh={locale==='zh-CN'} disabled={busy||!ready} onAction={clipAction}/>} automationChoice={id=>envelopes.get(id)?.choice} onFold={i=>toggleTrack(i)} isExpanded={i=>!!envelopes.get(project.tracks[i].id)?.expanded} loop={loop} range={engine.current.loopRange} onRange={r=>{engine.current.configureLoop(loop,r);setPosition(engine.current.position);refreshMixer(n=>n+1);}} automationAt={renderEnvelope} renderTrackMix={renderTrackMix} renderBusMix={renderBusMix} onAdd={()=>addDialog.current?.showModal()} onTrackMenu={trackMenu} onSeek={seek} seekingDisabled={busy} locale={locale} project={{...displayProject,timing:timingProject.timing,automation:timingProject.automation}} selected={typeof selected==='number'?selected:-1} onSelect={selectChannel} onChange={change} position={position} duration={duration} levels={levels}/></div>}{workspaceView==='session'&&<SessionView project={displayProject} selected={typeof selected==='number'?selected:-1} zh={locale==='zh-CN'} disabled={busy||!ready} onScenes={changeScenes} onCreate={createInSlot} state={i=>engine.current.liveState(i)} focus={slotEditor} onEmpty={(i,scene)=>{const track=project.tracks[i].id;selectChannel(i);setSlotEditor({track,scene:scene.id,clip:null});if(engine.current.playing)void launchScene(scene,track);}} onLaunch={launchScene} onEdit={openSlotEditor}/>}{workspaceView==='arrangement'&&showInfo&&typeof selected==='number'&&<div className="track-context"><button onClick={()=>setShowInfo(false)} aria-label="Close track info">×</button><TrackInfo activeInstrument={activeCode===assignment.code?(assignment.patch??descriptions?.faust_instruments['shallow-synth-v1']):{name:{[locale]:activeName},description:{'zh-CN':'当前自定义 Faust 音色；原始 MIDI 乐器资料仅供参考。',en:'Current custom Faust patch; original MIDI instrument notes are reference only.'}}} track={descriptions?.tracks.find(t=>t.id===project.tracks[selected].id)} file={descriptions} locale={locale}/></div>}</section><PanelResizeHandle value={overviewHeight} min={overviewMin} max={expandedLower?overviewMax:overviewHeight} onChange={height=>setOverviewAdjustment((height-defaultOverview)/rowSpace)} zh={locale==='zh-CN'}/></WorkspacePanel>
+  {hasMixer&&<WorkspacePanel id="mixer" title={locale==='zh-CN'?'混音台':'Mixer'} summary="A / B / MASTER" collapsed={collapsed.mixer} onToggle={()=>togglePanel('mixer')}><Mixer locale={locale} onAdd={()=>addDialog.current?.showModal()} onTrackMenu={trackMenu} project={displayProject} engine={engine.current} selected={selected} onSelect={selectChannel} onChange={change} ready={ready} busy={busy} levels={mixLevels} refresh={()=>refreshMixer(v=>v+1)}/>{splitDocks&&<PanelResizeHandle target="mixer" value={mixerHeight} min={headerHeight+minDockBody} max={headerHeight+dockSpace-minDockBody} onChange={height=>setMixerShare((height-headerHeight)/dockSpace)} zh={locale==='zh-CN'}/>}</WorkspacePanel>}
+  {workspaceView==='performance'?performanceEditor&&<dialog className="performance-device-editor" ref={focusedDialog} onClose={()=>openPerformanceEditor(false)}>
+    <button className="editor-close" aria-label={locale==='zh-CN'?'关闭设备编辑器':'Close device editor'} onClick={()=>focusedDialog.current?.close()}>×</button>
+    {deviceEditor}
+  </dialog>:<WorkspacePanel id="devices" title={locale==='zh-CN'?'设备链':'Devices'} summary={typeof selected==='number'?`CH ${selected+1}`:selected.toUpperCase()} collapsed={collapsed.devices} onToggle={()=>togglePanel('devices')}>{deviceEditor}</WorkspacePanel>}
+  {workspaceView!=='performance'&&<WorkspacePanel id="notes" title={locale==='zh-CN'?'音符编辑':'Notes'} summary={typeof selected==='number'?`CH ${selected+1} · MIDI`:'MIDI'} collapsed={collapsed.notes} onToggle={()=>togglePanel('notes')}>
    {workspaceView==='session'&&typeof selected==='number'&&!editingClip?<p className="piano-no-track">{locale==='zh-CN'?'未选择 Clip':'No clip selected'}</p>:typeof selected==='number'?<PianoRoll referenceCount={editingClip?clipReferenceCount(project,editingClip.id):undefined} clipRef={workspaceView==='arrangement'?activeRef:undefined} clip={editingClip??(workspaceView==='arrangement'?activeClip:undefined)} onExitClip={()=>{setFocusedRef(undefined);setSlotEditor(null);}} key={`${generation.current}/${project.tracks[selected].id}/${editingClip?.id??''}`} project={localEditor??project} index={selected} zh={locale==='zh-CN'} disabled={busy||!ready||assistantTurn.current} playhead={editingClip?(engine.current.liveState(selected).active?.clip?.id===editingClip.id?engine.current.liveState(selected).phase:0):secondsToTick(timingProject,position)} onCommit={editingClip?editSlotNotes:edit=>commitNoteEdit(selected,edit,'user')} onSeek={editingClip?undefined:tick=>seek(tickToSeconds(timingProject,tick))}/>:<p className="piano-no-track">{locale==='zh-CN'?'选择一条 MIDI 轨道来编辑音符。Return 和 Master 没有音符。':'Select a MIDI track to edit notes. Return and Master have no notes.'}</p>}
-  </WorkspacePanel></main><StudioSidebar zh={locale==='zh-CN'} inspectorKey={projectInstance.current} hardware={<HexblocksPanel zh={locale==='zh-CN'} connected={hexblocks.connected} active={hexblocks.active} connectors={hexblocks.connectors} config={hexblocks.config} error={hexblocks.error} claim={hexblocks.claim} options={mappingOptions()} mappingRequest={mappingRequest} mappings={project.hardwareMappings??[]} onMap={draft=>{mapHardware(draft);}} onRemove={removeMapping} onToggle={id=>commitMappings((project.hardwareMappings??[]).map(m=>m.id===id?{...m,enabled:!m.enabled}:m))} targetLabel={targetLabel} busy={busy||assistantTurn.current} targetValid={m=>!!targetForMapping(m)}/>}>{heading=><Assistant heading={heading} projectScope={editorState.current.conversationProject!} onUserGesture={()=>{void engine.current.resumeAudio().catch(()=>{});}} key={projectInstance.current} locale={locale} context={{generation:generation.current,selection:assistantTarget}} getContext={snapshot} execute={musicCommand}/>}</StudioSidebar></div>
+  </WorkspacePanel>}</main><StudioSidebar zh={locale==='zh-CN'} inspectorKey={projectInstance.current} hardware={<HexblocksPanel zh={locale==='zh-CN'} connected={hexblocks.connected} active={hexblocks.active} connectors={hexblocks.connectors} config={hexblocks.config} error={hexblocks.error} claim={hexblocks.claim} options={mappingOptions()} mappingRequest={mappingRequest} mappings={project.hardwareMappings??[]} onMap={draft=>{mapHardware(draft);}} onRemove={removeMapping} onToggle={id=>commitMappings((project.hardwareMappings??[]).map(m=>m.id===id?{...m,enabled:!m.enabled}:m))} targetLabel={targetLabel} busy={busy||assistantTurn.current} targetValid={m=>!!targetForMapping(m)}/>}>{heading=><Assistant heading={heading} projectScope={editorState.current.conversationProject!} onUserGesture={()=>{void engine.current.resumeAudio().catch(()=>{});}} key={projectInstance.current} locale={locale} context={{generation:generation.current,selection:assistantTarget}} getContext={snapshot} execute={musicCommand}/>}</StudioSidebar></div>
   <dialog ref={clipRenameDialog} className="parameter-menu clip-rename" aria-label={locale==='zh-CN'?'重命名 Clip':'Rename clip'} onClose={()=>{clipNameInput.current?.setCustomValidity('');setRenameTarget(null);}} style={renameTarget?{left:Math.max(4,Math.min(renameTarget.x,window.innerWidth-250)),top:Math.max(4,Math.min(renameTarget.y,window.innerHeight-110))}:undefined} onClick={e=>{if(e.target===e.currentTarget)clipRenameDialog.current?.close();}}>
    <form onSubmit={submitClipName}><label>{locale==='zh-CN'?'Clip 名称':'Clip name'}<input ref={clipNameInput} required onInput={e=>e.currentTarget.setCustomValidity('')}/></label>
    <button type="submit">{locale==='zh-CN'?'重命名':'Rename'}</button></form>

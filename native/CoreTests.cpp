@@ -1,4 +1,5 @@
 #include "Core.h"
+#include "MidiCapture.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -30,7 +31,31 @@ process=*(t),*(t);
 )dsp";
 }
 int main(int argc,char** argv) {
+    for(int ch=0;ch<16;++ch)for(int type=8;type<=14;++type){
+        const bool control=type==11||type==13||type==14;
+        auto idle=sg::standalone::captureMidi(uint8_t(type*16+ch),-1);
+        require(idle.needed()==control&&idle.controller==control&&idle.track<0,"unarmed MIDI control delivery");
+        auto armed=sg::standalone::captureMidi(uint8_t(type*16+ch),2);
+        require(armed.needed()&&armed.controller==control&&armed.track==2,"armed capture and MIDI control share one event");
+    }
     std::string root=argc>1?argv[1]:".";
+    {
+        sg::Core routed;
+        sg::Rack rack;rack.instrument="v=hslider(\"gain\",1,0,1,.001);g=button(\"gate\");process=v*g <: _,_;";
+        routed.load(rack,48000);
+        std::array<float,16> left{},right{};
+        auto level=[&](std::initializer_list<sg::Midi> notes){
+            routed.render(left.data(),right.data(),16,notes,{});
+            return left.back();
+        };
+        level({{0,0x94,60,32,1},{0,0x94,60,96,2}});
+        // The second keyboard releases first, leaving the quieter first voice.
+        require(std::abs(level({{0,0x84,60,0,2}})-32.f/127)<.001f,"same pitch released by its owner");
+        level({{0,0x94,60,96,2},{0,0xb4,64,127,1},{0,0xb4,64,127,2},
+               {0,0x84,60,0,1,true},{0,0x84,60,0,2,true}});
+        require(std::abs(level({{0,0xb4,64,0,1}})-96.f/127)<.001f,"route pedal release preserves other keyboard");
+        require(level({{0,0xb4,64,0,2}})==0,"last pedal releases its voice");
+    }
     sg::Core engine;
     sg::Rack rack;
     rack.instrument=instrument;
