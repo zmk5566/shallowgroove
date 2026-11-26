@@ -10,10 +10,10 @@ export function TempoControl({bpm,overridden,disabled,zh,onBegin,onChange,onFini
  useEffect(()=>{if(disabled)end(true);},[disabled]);
  function apply(value:number|null){try{setError('');if(value!==null)validBpm(value);onBegin();try{onChange(value);onFinish();}catch(e){onFinish(true);throw e;}}catch(e){setError(String(e));}}
  function submit(){if(!accept.current)return;accept.current=false;const value=Number(text);try{validBpm(value);setEditing(false);apply(value);}catch(e){setError(String(e));setEditing(false);}}
- disabled=disabled||source==='hardware';
+ disabled=disabled||source==='hardware'||source==='performance';
  const shown=preview??bpm;
  return <div className="tempo-control" onContextMenu={e=>{e.preventDefault();window.dispatchEvent(new CustomEvent('shallowgroove-parameter-menu',{detail:{trackId:'master',device:'mixer',address:'bpm',x:e.clientX,y:e.clientY}}));}}>
-  {source==='hardware'&&<small title={zh?'由 Hexblocks 控制':'Controlled by Hexblocks'}>HEX</small>}{source==='automation'&&<small title={zh?'速度自动化正在读取':'Reading tempo automation'}>AUTO</small>}
+  {source==='performance'&&<small title={zh?'由演出节点控制':'Controlled by Set BPM'}>SET</small>}{source==='hardware'&&<small title={zh?'由 Hexblocks 控制':'Controlled by Hexblocks'}>HEX</small>}{source==='automation'&&<small title={zh?'速度自动化正在读取':'Reading tempo automation'}>AUTO</small>}
   {resumable&&<button aria-label="Resume tempo automation" disabled={disabled} onClick={onResume}>Read</button>}
   {editing?<input ref={input} aria-label="Enter BPM" className="tempo-input" type="text" inputMode="decimal" value={text} onChange={e=>setText(e.target.value)} onBlur={submit} onKeyDown={e=>{e.stopPropagation();if(e.key==='Enter'){e.preventDefault();submit();}if(e.key==='Escape'){accept.current=false;setEditing(false);setError('');}}}/>:<div className="tempo-value" role="spinbutton" aria-label="Project BPM" aria-valuemin={MIN_BPM} aria-valuemax={MAX_BPM} aria-valuenow={Number(shown.toFixed(2))} aria-disabled={disabled} tabIndex={disabled?-1:0} title={zh?'拖动调整 BPM · Shift 精调 · 双击输入 · 右键自动化 / 硬件映射':'Drag to change BPM · Shift for fine adjustment · Double-click to type · Right-click for automation / hardware mapping'}
    onDoubleClick={()=>{if(!disabled){setError('');setText(bpm.toFixed(2));accept.current=true;setEditing(true);}}}

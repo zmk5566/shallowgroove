@@ -128,7 +128,7 @@ export class PerformanceMidi {
     }
     const triggerRoute=inputsOf.get(JSON.stringify([source.id,'trigger']));
     const trigger=triggerRoute&&nodes.get(triggerRoute.source);
-    const oscKey=trigger?.kind==='osc-input'&&trigger.output==='trigger'?oscSignalKey(trigger.endpointId,trigger.address):undefined;
+    const oscKey=trigger?.kind==='osc-input'?oscSignalKey(trigger.endpointId,trigger.address):undefined;
     if(triggerRoute&&oscKey===undefined&&trigger?.kind!=='threshold'){
      if(trigger?.kind!=='retrigger'||!activeClocks.has(trigger.id))continue;
      const units=this.intervals[trigger.id];if(units===undefined)continue;

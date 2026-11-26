@@ -109,8 +109,21 @@ export class AudioEngine {
   if(track==='master')return this.master;
   return this.effects?.returns[track]?.gain??null;
  }
- get bpm(){const p=this.timingProject??this.project;return p?bpmAtTick(p,secondsToTick(p,this.position)):120;}
- get tempoSource(){if(this.hardwareValues.has(hardwareKey({trackId:'master',device:'mixer',address:'bpm'})))return 'hardware';const p=this.timingProject??this.project;return p?.automation?.some(l=>isTempoTarget(l)&&l.mode==='read'&&l.points.length)?'automation':p?.timing.bpm!==undefined?'override':'midi';}
+ private performanceBpm?:number;
+ setPerformanceBpm(value:number|undefined){
+  if(this.performanceBpm===value)return;
+  this.performanceBpm=value;
+  if(this.performanceDsp===true){
+   this.syncPerformanceClock();
+   if(!this.native&&this.context)this.effects?.tempo(this.bpm,this.context.currentTime);
+   if(this.native&&this.effects)for(const track of [...this.voices.keys(),...busNames])for(const fx of this.effects.chain(track).effects){
+    const control=fx.controls.find(c=>c.label==='BPM');
+    if(control)this.native.parameter(track,fx.id,control.address,Math.max(control.min,Math.min(control.max,this.bpm)));
+   }
+  }
+ }
+ get bpm(){if(this.performanceDsp===true&&this.performanceBpm!==undefined)return this.performanceBpm;const p=this.timingProject??this.project;return p?bpmAtTick(p,secondsToTick(p,this.position)):120;}
+ get tempoSource(){if(this.performanceDsp===true&&this.performanceBpm!==undefined)return 'performance';if(this.hardwareValues.has(hardwareKey({trackId:'master',device:'mixer',address:'bpm'})))return 'hardware';const p=this.timingProject??this.project;return p?.automation?.some(l=>isTempoTarget(l)&&l.mode==='read'&&l.points.length)?'automation':p?.timing.bpm!==undefined?'override':'midi';}
  hardwareValues=new Map<string,{mapping:HardwareMapping;value:number;param?:AudioParam;restore:number;overrides:string[];updated?:number}>();
  applyHardware(mapping:HardwareMapping,value:number){
   if(isTempoTarget(mapping)){
@@ -238,6 +251,7 @@ export class AudioEngine {
   if(this.performanceDsp===state)return;
   window.clearInterval(this.dspClock);window.clearTimeout(this.dspFade);
   if(this.performanceDsp===null)this.resumeAfterPerformance=this.context?.state==='running';
+  this.setPerformanceBpm(undefined);
   this.performanceDsp=state;this.clearClicks();
   const ctx=this.context;
   if(state===null){

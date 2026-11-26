@@ -90,6 +90,6 @@ export function packFile(session:Session,history?:History,conversation?:unknown[
   return {...s,project:{...s.project,global_events:events(s.project.global_events),tracks:s.project.tracks.map(t=>({...t,events:events(t.events)}))},voices:s.voices.map(v=>({...v,code:source(v.code)})),chains:s.chains.map(c=>c.map(f=>({...f,code:source(f.code)})))};
  };
  const current=pack(session),saved=history?{cursor:history.cursor,entries:history.entries.map(e=>({...e,before:pack(e.before),after:pack(e.after)}))}:undefined;
- if(hasPerformance)minAppVersion='0.6.0-dev.1';
+ if(hasPerformance)minAppVersion='0.6.0-pre.1';
  return {format:'shallowgroove-project',version:1,savedWith:appVersion,minAppVersion,encoding:'asset-table',session:current,...(saved?{history:saved}:{}),midi,sources,...(conversation?{conversation}:{})};
 }

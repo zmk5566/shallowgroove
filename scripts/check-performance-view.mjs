@@ -92,6 +92,23 @@ try{
    await expect(page.locator('.track-arm[aria-pressed=true]')).toHaveCount(0);
   }
  }
+ await page.getByRole('button',{name:'Learn',exact:true}).click();
+ const learn=page.getByRole('dialog',{name:'Learn'});
+ await expect(learn.getByRole('status').first()).toContainText('等待');
+ await page.evaluate(()=>{window.testOsc([['/learn',.25,.5],['/learn',.75,.5]],'pd');});
+ await expect(learn.locator('label')).toHaveCount(2);
+ await expect.poll(async()=>{await page.evaluate(()=>window.sendTestMidi('keys',[0xb2,74,99]));return learn.locator('label').count();}).toBe(3);
+ await learn.getByRole('button',{name:'停止 Learn'}).click();
+ await page.evaluate(()=>window.testOsc([['/after',42]],'pd'));
+ await expect(learn.locator('label')).toHaveCount(3);
+ await learn.locator('label').filter({hasText:'UDP 9001 · /learn [0]'}).getByRole('checkbox').check();
+ await learn.locator('label').filter({hasText:'Ch 3 · CC 74'}).getByRole('checkbox').check();
+ await learn.getByRole('button',{name:/添加选中项/}).click();
+ const learned=(await inspect('nodes')).items;
+ assert.ok(learned.some(n=>n.kind==='osc-input'&&n.endpointId==='pd'&&n.argument===0&&n.address==='/learn'));
+ assert.ok(learned.some(n=>n.kind==='midi-control'&&n.channel===3&&n.controller===74&&n.midiDeviceId==='keys'));
+ assert.equal(learned.length,2);
+ await run('undo');await expect(page.locator('.perf-card')).toHaveCount(0);
  const canvas=page.locator('.perf-viewport');
  await canvas.click({button:'right',position:{x:74,y:53}});
  const picker=page.getByRole('dialog',{name:'添加节点'});
@@ -185,11 +202,11 @@ try{
  await page.getByRole('button',{name:'添加到画布'}).click();
  await picker.getByRole('button',{name:/^输入/}).click();
  await picker.getByRole('button',{name:/^OSC/}).click();
- await expect(picker.getByRole('button',{name:'数值输入',exact:true})).toBeVisible();
+ await expect(picker.getByRole('button',{name:'消息输入',exact:true})).toBeVisible();
  const search=picker.getByRole('searchbox');
- await search.fill('OSC 触发');
+ await search.fill('OSC 消息');
  await expect(picker.locator('.perf-node-list button')).toHaveCount(1);
- await expect(picker.locator('.perf-node-list button')).toContainText('触发输入');
+ await expect(picker.locator('.perf-node-list button')).toContainText('消息输入');
  await search.fill('CC');
  await expect(picker.locator('.perf-node-list button')).toContainText('控制器输入');
  await search.fill('');
@@ -301,9 +318,19 @@ try{
  await page.waitForFunction(()=>document.querySelector('.perf-scale'));
  await page.evaluate(()=>{for(const v of [110,90,10])window.sendTestMidi('keys',[176,1,v]);});
  await expect.poll(()=>page.evaluate(()=>window.workletMidi.map(m=>[m.data[0]>>4,m.data[1]]))).toEqual([[9,60],[8,60]]);
- await edit({op:'remove_route',id:'gate'});await route('osc-hit','hit','note','trigger');
+ await edit({op:'remove_route',id:'gate'});await route('osc-hit','xy','note','trigger');
  await page.evaluate(()=>{window.workletMidi.length=0;window.testOsc([['/sg/hit',48]],'pd');window.testOsc([['/sg/hit',62.8],['/sg/hit',62.8]]);});
  await expect.poll(()=>page.evaluate(()=>window.workletMidi.map(m=>[m.data[0]>>4,m.data[1]]))).toEqual([[9,63],[8,63],[9,63],[8,63]]);
+ await edit({op:'put_node',node:{id:'tempo',kind:'set-bpm',name:'Set BPM'}});
+ const tempoCard=page.locator('.perf-set-bpm');
+ const tempoEntry=tempoCard.locator('input[type=number]');
+ await tempoEntry.fill('111');await tempoEntry.press('Enter');
+ await expect(tempoEntry).toHaveValue('111');
+ await route('live-tempo','xy','tempo','bpm');
+ await page.evaluate(()=>window.testOsc([['/sg/hit',145]]));
+ await expect(tempoCard.locator('.perf-driven output')).toHaveText('145');
+ await edit({op:'remove_route',id:'live-tempo'});
+ await expect.poll(async()=>Number(await tempoEntry.inputValue())).toBeCloseTo(111,2);
  assert.deepEqual(errors,[]);
  console.log('PASS assistant navigation in all three views, graph edits with undo/redo, drag readback, live effect value, routed keyboard and knob-pitched retriggers reaching the Faust worklet with transport stopped, saved and reopened routes and stack mode.');
 }finally{

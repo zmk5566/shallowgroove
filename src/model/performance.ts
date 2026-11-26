@@ -8,7 +8,7 @@ interface PerformanceNodeBase {
  value?:number;
 }
 export type PerformanceNode = PerformanceNodeBase & (
- | {kind:'knob'|'sensor'|'effect'}
+ | {kind:'knob'|'sensor'|'effect'|'set-bpm'}
  | {kind:'midi-input';midiDeviceId:string}
  | {kind:'midi-control';midiDeviceId:string;message:'cc'|'bend'|'pressure';controller?:number}
  | {kind:'threshold';low:number;high:number;manualValue:number}
@@ -50,7 +50,7 @@ export interface PerformanceRoute {
  id:string;
  source:string;
  target:string;
- input:TransformInput|'gate'|'pitch'|'velocity'|'lengthMs'|'interval'|'enabled'|'trigger'|'midi';
+ input:TransformInput|'bpm'|'gate'|'pitch'|'velocity'|'lengthMs'|'interval'|'enabled'|'trigger'|'midi';
 }
 export interface PerformanceLink {
  id:string;
@@ -70,6 +70,7 @@ export interface PerformanceGraph {
 }
 export type PerformanceEdit=
  | {op:'put_node';node:PerformanceNode;position?:{x:number;y:number}}
+ | {op:'add_inputs';nodes:PerformanceNode[]}
  | {op:'move_node';id:string;x:number;y:number}
  | {op:'remove_node';id:string}
  | {op:'put_link';link:PerformanceLink}
@@ -106,8 +107,10 @@ export function validatePerformance(value:unknown):asserts value is PerformanceG
  if(!graph||!Array.isArray(graph.nodes)||!Array.isArray(graph.links)||(graph.routes!==undefined&&!Array.isArray(graph.routes))||!graph.layout||
     typeof graph.layout!=='object'||Array.isArray(graph.layout))throw Error('Invalid performance graph');
  const nodes=new Map<string,PerformanceNode>();
+ let hasTempo=false;
  for(const node of graph.nodes){
-  if(!node||!validId(node.id)||!text(node.name)||!['knob','sensor','effect','midi-input','note','retrigger','remap','osc-input','threshold','scale','midi-control'].includes(node.kind))throw Error('Invalid performance node');
+  if(!node||!validId(node.id)||!text(node.name)||!['knob','sensor','effect','midi-input','note','retrigger','remap','osc-input','threshold','scale','midi-control','set-bpm'].includes(node.kind))throw Error('Invalid performance node');
+  if(node.kind==='set-bpm'){if(hasTempo)throw Error('Only one Set BPM node is allowed');hasTempo=true;}
   if(nodes.has(node.id))throw Error('Duplicate performance node');
   if(node.kind==='effect'&&(!text(node.trackId)||!text(node.device)))throw Error('Invalid performance effect target');
   if(node.uid!==undefined&&(!text(node.uid)||!Number.isInteger(node.channel)))throw Error('Invalid performance sensor binding');
@@ -238,10 +241,11 @@ export function canRoutePerformance(source:PerformanceNode,target:PerformanceNod
   return !reachable.has(source.id);
  }
  switch(input){
+  case 'bpm':return target.kind==='set-bpm'&&isPerformanceNumericSource(source);
   case 'interval':case 'enabled':return target.kind==='retrigger'&&isPerformanceNumericSource(source);
   case 'pitch':case 'velocity':case 'lengthMs':return target.kind==='note'&&isPerformanceNumericSource(source);
   case 'gate':return target.kind==='note'&&source.kind==='threshold';
-  case 'trigger':return target.kind==='note'&&(source.kind==='threshold'||source.kind==='retrigger'||(source.kind==='osc-input'&&source.output==='trigger'));
+  case 'trigger':return target.kind==='note'&&(source.kind==='threshold'||source.kind==='retrigger'||source.kind==='osc-input');
   case 'midi':return target.kind==='effect'&&target.device==='instrument'&&(source.kind==='note'||source.kind==='midi-input');
   default:return false;
  }
@@ -261,6 +265,14 @@ function initialPosition(graph:PerformanceGraph) {
 export function editPerformance(graph:PerformanceGraph,edit:PerformanceEdit):PerformanceGraph {
  let result:PerformanceGraph;
  switch(edit.op){
+  case 'add_inputs':{
+   result={...graph,nodes:[...graph.nodes],layout:{...graph.layout}};
+   for(const n of edit.nodes){
+    if(!['midi-control','osc-input','sensor'].includes(n.kind)||Object.hasOwn(result.layout,n.id))throw Error('Invalid learned input');
+    result.layout[n.id]=initialPosition(result);result.nodes.push(n);
+   }
+   break;
+  }
   case 'put_node':{
    const layout=Object.hasOwn(graph.layout,edit.node.id)?graph.layout:{...graph.layout,[edit.node.id]:edit.position??initialPosition(graph)};
    const node=edit.node.kind==='remap'&&edit.node.manualValue===undefined&&!graph.nodes.some(n=>n.id===edit.node.id)

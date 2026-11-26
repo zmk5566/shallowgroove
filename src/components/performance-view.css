@@ -126,3 +126,13 @@
 .perf-node-picker button { display:flex;width:100%;height:auto;justify-content:space-between;text-align:left;padding:4px 6px;border:0; }
 .perf-node-picker button:hover:not(:disabled),.perf-node-picker button:focus-visible { background:var(--line); }
 .perf-node-picker .perf-node-back { color:var(--muted); }
+
+.perf-learn[open] { display:flex;flex-direction:column;gap:8px;width:min(480px,90vw);max-height:70vh;padding:12px; }
+.perf-learn header,.perf-learn footer { display:flex;align-items:center;justify-content:space-between; }
+.perf-learn footer { justify-content:flex-end; }
+.perf-learn p { margin:0;color:var(--muted); }
+.perf-learn-list { overflow:auto;min-height:0; }
+.perf-learn-list label { display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line); }
+.perf-learn-list input[type=checkbox] { width:14px;height:14px;padding:0;margin:0;flex:none;appearance:auto;accent-color:var(--signal); }
+.perf-learn-list span { flex:1;overflow-wrap:anywhere;min-width:0; }
+.perf-learn-list output { font-variant-numeric:tabular-nums; }

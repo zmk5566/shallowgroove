@@ -2,6 +2,7 @@ import {useLayoutEffect,useRef,useState,type PointerEvent,type ReactNode} from '
 import {canRoutePerformance,defaultPerformancePosition,isPerformanceNumericSource,isPerformanceUnitSource,retriggerDivisions,type PerformanceEdit,type PerformanceGraph,type PerformanceLink,type PerformanceNode,type PerformanceRoute} from '../model/performance.ts';
 import {OscBinding,OscEndpointName,SignalMonitor} from './SignalMonitor';
 import type {PerformanceSignals} from '../hardware/performance-signals';
+import {PerformanceLearn} from './PerformanceLearn';
 import {PerformanceNodePicker,type NodeGroup} from './PerformanceNodePicker';
 import './performance-view.css';
 
@@ -12,7 +13,9 @@ const sensorKey=(uid:string,channel:number)=>JSON.stringify([uid,channel]);
 type Mode='graph'|'stack';
 type Point={x:number;y:number};
 type Visual={mode:Mode;selectedNode:string|null;viewport:Point & {width:number;height:number}};
+const twoOutputs=(n:PerformanceNode)=>n.kind==='threshold'||(n.kind==='osc-input'&&n.output==='value');
 type Props={
+  bpm:number;onSetBpm:(bpm:number)=>void;
   signals:PerformanceSignals;graph:PerformanceGraph; zh:boolean; devices:Device[];
   sensors:SensorRef[]; savedSensors?:{uid:string;channel:number}[]; values:Record<string,number>;
   onEdit:(edit:PerformanceEdit)=>void; onInput:(id:string,value:number)=>void;
@@ -140,7 +143,9 @@ function NodeSettings({node,signals,zh,midiInputs,onEnableMidi,onEdit,directPitc
   </div>;
 }
 
-export function PerformanceView({signals,graph,zh,devices,sensors,savedSensors,values,midiInputs,onRefreshMidi,onEnableMidi,onEdit,onInput,onParameter,onTrigger,onSelectEffect,onOpenEffect,onVisualContext,initialVisual}:Props){
+export function PerformanceView({bpm,onSetBpm,signals,graph,zh,devices,sensors,savedSensors,values,midiInputs,onRefreshMidi,onEnableMidi,onEdit,onInput,onParameter,onTrigger,onSelectEffect,onOpenEffect,onVisualContext,initialVisual}:Props){
+  const [learnOpen,setLearnOpen]=useState(false);
+  function openLearn(){setLearnOpen(true);onRefreshMidi();}
   const [picker,setPicker]=useState<{anchor:Point;position:Point}|null>(null);
   const oscPosition=useRef<Point|undefined>(undefined);
   const [oscDraft,setOscDraft]=useState<Extract<PerformanceNode,{kind:'osc-input'}>|null>(null);
@@ -173,20 +178,21 @@ export function PerformanceView({signals,graph,zh,devices,sensors,savedSensors,v
   const kind=(k:PerformanceNode['kind'])=>({
     'midi-control':t('MIDI control','MIDI 控制器'),threshold:t('Threshold / Gate','阈值 / 门控'),scale:t('Scale','音阶'),
     knob:t('Virtual knob','虚拟旋钮'),sensor:t('HexBlocks sensor','HexBlocks 传感器'),effect:t('Device','设备'),
-    'osc-input':t('OSC input','OSC 输入'),'midi-input':t('MIDI input','MIDI 输入'),note:t('Note','音符'),retrigger:t('Retrigger','重复触发'),remap:t('Remap','数值映射')
+    'set-bpm':t('Set BPM','设置 BPM'),'osc-input':t('OSC input','OSC 输入'),'midi-input':t('MIDI input','MIDI 输入'),note:t('Note','音符'),retrigger:t('Retrigger','重复触发'),remap:t('Remap','数值映射')
   })[k];
   const retriggerName=(free:boolean)=>free?t('Free retrigger','自由重复触发'):t('Quantized retrigger','量化重复触发');
   const routes=graph.routes??[];
   const wires:Wire[]=[...graph.links,...routes];
-  const inputLabel=(input:RouteInput)=>({pitch:t('Pitch','音高'),trigger:t('Trigger','触发'),midi:t('MIDI In','MIDI 输入'),
+  const inputLabel=(input:RouteInput)=>({bpm:'BPM',pitch:t('Pitch','音高'),trigger:t('Trigger','触发'),midi:t('MIDI In','MIDI 输入'),
     gate:t('Gate','门控'),low:t('Low','低阈值'),high:t('High','高阈值'),value:t('Value In','数值输入'),velocity:t('Velocity','力度'),lengthMs:t('Length (ms)','时长（毫秒）'),interval:t('Interval','间隔'),enabled:t('Enabled','启用'),
     inMin:t('Input start','输入起点'),inMax:t('Input end','输入终点'),outMin:t('Output start','输出起点'),outMax:t('Output end','输出终点')})[input];
   const outputLabel=(n:PerformanceNode,rise=false)=>n.kind==='threshold'?(rise?t('Rising trigger','上升沿触发'):t('Gate Out','门控输出')):
-    n.kind==='scale'?t('Pitch Out','音高输出'):n.kind==='note'||n.kind==='midi-input'?t('MIDI Out','MIDI 输出'):
-    (n.kind==='retrigger'||(n.kind==='osc-input'&&n.output==='trigger'))?t('Trigger Out','触发输出'):t('Value Out','数值输出');
+    n.kind==='osc-input'&&(rise||n.output==='trigger')?t('Message received','消息到达'):n.kind==='scale'?t('Pitch Out','音高输出'):n.kind==='note'||n.kind==='midi-input'?t('MIDI Out','MIDI 输出'):
+    n.kind==='retrigger'?t('Trigger Out','触发输出'):t('Value Out','数值输出');
   const inputs=(n:PerformanceNode):RouteInput[]=>{
     switch(n.kind){
       case 'note':return ['pitch','velocity','lengthMs','trigger','gate'];
+      case 'set-bpm':return ['bpm'];
       case 'scale':return ['value'];
       case 'threshold':return ['value','low','high'];
       case 'retrigger':return ['interval','enabled'];
@@ -207,14 +213,15 @@ export function PerformanceView({signals,graph,zh,devices,sensors,savedSensors,v
   const item=(key:string,name:string,disabled=false)=>({key,name,disabled});
   const inventory=sensorInventory(sensors,savedSensors,graph);
   const groups:NodeGroup[]=[
-    {name:t('Inputs','输入'),items:[item('knob',kind('knob')),
+    {name:t('Inputs','输入'),items:[item('learn','Learn…'),item('knob',kind('knob')),
       {key:'midi',name:'MIDI',items:[
         item('midi-input',t('Note input (Note On / Off)','音符输入（Note On / Off）'),!midi),
         item('midi-control',t('Controller input (CC, pitch bend, pressure)','控制器输入（CC、弯音、通道压力）'),!midi)]},
       {key:'osc',name:'OSC',items:[
-        item('osc-value',t('Value input','数值输入')),item('osc-trigger',t('Trigger input','触发输入'))]},
+        item('osc-input',t('Message input','消息输入'))]},
       {key:'hexblocks',name:'HexBlocks',disabled:!inventory.devices.length,items:inventory.devices.map(device=>({...device,items:device.items.map(msg=>({...msg,name:msg.name+(inventory.live.has(msg.key)?'':t(' (offline)','（离线）'))}))}))}]},
     {name:t('Value processing','数值处理'),items:[item('remap',kind('remap')),item('threshold',kind('threshold'))]},
+    {name:t('Transport','速度与节拍'),items:[item('set-bpm',kind('set-bpm'),graph.nodes.some(n=>n.kind==='set-bpm'))]},
     {name:t('Note processing','音符处理'),items:[item('note',kind('note')),item('retrigger',retriggerName(false)),item('retrigger-free',retriggerName(true)),item('scale',kind('scale'))]},
     ...[true,false].map(instrument=>({name:instrument?t('Instruments','乐器'):t('Effects','效果器'),
       items:choices.filter(c=>c.fields.kind==='effect'&&(c.fields.device==='instrument')===instrument).map(c=>item(c.k,c.fields.name))}))
@@ -233,15 +240,17 @@ export function PerformanceView({signals,graph,zh,devices,sensors,savedSensors,v
     if(!picker)return;
     const position=picker.position,create=(node:PerformanceNode)=>add(node,position);
     setPicker(null);
+    if(choice==='learn'){openLearn();return;}
     const sensor=inventory.refs.get(choice);
     if(sensor){create({id:id(),kind:'sensor',uid:sensor.uid,channel:sensor.channel,name:sensor.name});return;}
     if(choice==='midi-input'&&midi){create({id:id(),kind:'midi-input',midiDeviceId:midi.id,name:midi.name});return;}
     if(choice==='midi-control'&&midi){create({id:id(),kind:'midi-control',midiDeviceId:midi.id,name:midi.name,message:'cc',controller:1,channel:0});return;}
-    if(choice==='osc-value'||choice==='osc-trigger'){
-      setOscDraft({id:id(),kind:'osc-input',address:'',name:'OSC',argument:0,output:choice==='osc-value'?'value':'trigger'});oscPosition.current=position;return;
+    if(choice==='osc-input'){
+      setOscDraft({id:id(),kind:'osc-input',address:'',name:'OSC',argument:0,output:'value'});oscPosition.current=position;return;
     }
     if(choice==='knob'){create({id:id(),kind:'knob',name:t('Virtual knob ','虚拟旋钮 ')+(graph.nodes.filter(n=>n.kind==='knob').length+1),value:0});return;}
     if(choice==='remap'){create({id:id(),kind:'remap',name:kind('remap'),inMin:0,inMax:1,outMin:0,outMax:127,manualValue:0});return;}
+    if(choice==='set-bpm'){create({id:id(),kind:'set-bpm',name:kind('set-bpm')});return;}
     if(choice==='scale'){create({id:id(),kind:'scale',name:kind('scale'),manualValue:60,root:0,scale:'major'});return;}
     if(choice==='threshold'){create({id:id(),kind:'threshold',name:kind('threshold'),manualValue:0,low:0.4,high:0.6});return;}
     if(choice==='note'){create({id:id(),kind:'note',name:kind('note'),pitch:60,velocity:100,lengthMs:180});return;}
@@ -270,7 +279,7 @@ export function PerformanceView({signals,graph,zh,devices,sensors,savedSensors,v
   function accepts(output:OutputPort,input:Port){
     const target=getNode(input.node),sender=getNode(output.node);
     if(!target||!sender||input.kind==='output')return false;
-    if(sender.kind==='threshold'&&!!output.rise!==(input.kind==='route'&&input.input==='trigger'))return false;
+    if(twoOutputs(sender)&&!!output.rise!==(input.kind==='route'&&input.input==='trigger'))return false;
     const control=isPerformanceNumericSource(sender);
     if(input.kind==='parameter')return control&&target.kind==='effect'&&freeParams(target).some(p=>p.address===input.address);
     if(!canRoutePerformance(sender,target,input.input,graph))return false;
@@ -337,6 +346,7 @@ export function PerformanceView({signals,graph,zh,devices,sensors,savedSensors,v
   }
   function manual(n:PerformanceNode,input:RouteInput){
     const label=inputLabel(input),change=(node:PerformanceNode)=>onEdit({op:'put_node',node});
+    if(n.kind==='set-bpm')return <NumberSetting inline label={label} value={Number(bpm.toFixed(2))} min={20} max={300} onCommit={onSetBpm}/>;
     if(n.kind==='scale'&&input==='value')return <NumberSetting inline label={label} value={n.manualValue} onCommit={v=>change({...n,manualValue:v})}/>;
     if(n.kind==='threshold'&&(input==='value'||input==='low'||input==='high')){
       const field=input==='value'?'manualValue':input;
@@ -430,6 +440,8 @@ export function PerformanceView({signals,graph,zh,devices,sensors,savedSensors,v
     <div className="perf-toolbar">
       <button aria-label={t('Add to canvas','添加到画布')} onClick={e=>{const r=e.currentTarget.getBoundingClientRect();openPicker({x:r.left,y:r.bottom});}}>＋ {t('Add','添加')}</button>
       {picker&&<PerformanceNodePicker anchor={picker.anchor} groups={groups} zh={zh} onPick={choose} onClose={()=>setPicker(null)}/>}
+      <button onClick={openLearn}>Learn</button>
+      {learnOpen&&<PerformanceLearn signals={signals} zh={zh} onClose={()=>setLearnOpen(false)} onAdd={nodes=>{onEdit({op:'add_inputs',nodes});setSelected(nodes[0].id);setEdit('');}}/>}
       <button onClick={onRefreshMidi}>{t('Refresh MIDI','刷新 MIDI')}</button>
       <span className="perf-modes"><button aria-pressed={mode==='graph'} onClick={()=>setMode('graph')}>{t('Graph','节点图')}</button><button aria-pressed={mode==='stack'} onClick={()=>setMode('stack')}>{t('Stack','堆栈')}</button></span>
     </div>
@@ -448,7 +460,7 @@ export function PerformanceView({signals,graph,zh,devices,sensors,savedSensors,v
           const index='input' in l?typed.indexOf(l.input):parameterIndex<0?-1:parameterIndex+typed.length;
           if(index<0)return null;
           const start=position(a),end=position(b);
-          const path=curve({x:start.x+width,y:start.y+portY+(a.kind==='threshold'&&'input' in l&&l.input==='trigger'?parameterStep:0)},{x:end.x,y:end.y+firstParameterY+(index+(b.kind==='effect'?0:b.kind==='threshold'?2:1))*parameterStep});
+          const path=curve({x:start.x+width,y:start.y+portY+(twoOutputs(a)&&'input' in l&&l.input==='trigger'?parameterStep:0)},{x:end.x,y:end.y+firstParameterY+(index+(b.kind==='effect'||b.kind==='set-bpm'?0:twoOutputs(b)?2:1))*parameterStep});
           return <g key={l.id} className={edit===l.id?'is-selected':''}><path d={path}/><path d={path} className="perf-wire-hit" onClick={()=>selectWire(l)}/></g>;
         })}</svg>}
         {graph.nodes.map(n=>{
@@ -461,12 +473,12 @@ export function PerformanceView({signals,graph,zh,devices,sensors,savedSensors,v
             }} onPointerMove={e=>{
               const start=origin.current;if(!start||start.id!==n.id)return;
               setDrag({id:n.id,pos:{x:Math.max(0,start.pos.x+e.clientX-start.pointer.x),y:Math.max(0,start.pos.y+e.clientY-start.pointer.y)}});
-            }} onPointerUp={endDrag} onPointerCancel={endDrag}><span>{n.kind==='retrigger'?retriggerName(n.timing==='free'):n.kind==='osc-input'?(n.output==='value'?t('OSC Value','OSC 数值'):t('OSC Trigger','OSC 触发')):kind(n.kind)}</span><span aria-hidden="true">⠿</span></button>
+            }} onPointerUp={endDrag} onPointerCancel={endDrag}><span>{n.kind==='retrigger'?retriggerName(n.timing==='free'):kind(n.kind)}</span><span aria-hidden="true">⠿</span></button>
             {effect?<div className="perf-device-title"><button className="perf-effect-name" title={n.name}>{n.name}</button>
               <button className="perf-device-open" aria-label={t('Open device editor','打开设备编辑器')} title={t('Open device editor','打开设备编辑器')}
                 onClick={e=>{e.stopPropagation();setSelected(n.id);setEdit('');if(n.trackId&&n.device){onSelectEffect(n.trackId,n.device);onOpenEffect(n.trackId,n.device);}}}>↗</button>
             </div>:<strong>{n.name}</strong>}
-            {!effect&&(n.kind==='threshold'?[false,true]:[false]).map(rise=>{
+            {!effect&&n.kind!=='set-bpm'&&(twoOutputs(n)?[false,true]:[false]).map(rise=>{
               const port:OutputPort={node:n.id,kind:'output',rise},label=outputLabel(n,rise);
               return <div key={String(rise)} className="perf-output-row"><small>{label}{!rise&&['remap','scale','midi-control','threshold'].includes(n.kind)&&values[n.id]!=null?' · '+fmt(values[n.id]):''}</small>
                 <button className="perf-port output" data-output={rise?'rise':'main'} data-drop-target={samePort(cable?.hover,port)||undefined}

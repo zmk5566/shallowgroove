@@ -1,4 +1,4 @@
-import {oscSignalKey} from '../model/performance.ts';
+import {oscSignalKey,type PerformanceNode} from '../model/performance.ts';
 import type {Connector} from './useHexblocks';
 
 export type OscArgument=number|string|boolean|null;
@@ -12,6 +12,7 @@ export interface OscBridge {
  onMessages(fn:(messages:OscMessage[])=>void):()=>void;
 }
 export type SignalRow={id:string;kind:'osc'|'sensor';endpointId?:string;name:string;time:number;args:OscArgument[];types?:string;history:number[];uid?:string;channel?:number};
+export type LearnedInput={key:string;node:PerformanceNode;source:string;value:OscArgument};
 type Snapshot={osc:OscSettings;available:boolean;rows:SignalRow[]};
 const capacity=128;
 export class PerformanceSignals {
@@ -31,6 +32,18 @@ export class PerformanceSignals {
  snapshot=()=>this.current;
  subscribe=(fn:()=>void)=>{this.listeners.add(fn);return ()=>{this.listeners.delete(fn);};};
  subscribeSettings=(fn:()=>void)=>{this.settingsListeners.add(fn);return ()=>{this.settingsListeners.delete(fn);};};
+ private learned?:Map<string,LearnedInput>;
+ private learnStart=0;
+ beginLearn(){this.learned=new Map();this.learnStart=Date.now();}
+ get learning(){return !!this.learned;}
+ learnedInputs(){return [...(this.learned?.values()??[])];}
+ endLearn(){const rows=this.learnedInputs();this.learned=undefined;return rows;}
+ learnCC(deviceId:string,name:string,data:number[]){
+  if(!this.learned||data.length!==3||(data[0]>>4)!==11)return;
+  const channel=(data[0]&15)+1,controller=data[1],key=JSON.stringify(['cc',deviceId,channel,controller]);
+  const source=name+' · Ch '+channel+' · CC '+controller;
+  this.learned.set(key,{key,source,value:data[2],node:{id:key,kind:'midi-control',name:source,midiDeviceId:deviceId,message:'cc',channel,controller}});
+ }
  async initialize(){
   if(!this.bridge)return;
   const status=await this.bridge.status();
@@ -74,6 +87,16 @@ export class PerformanceSignals {
   if(this.initialized&&!this.current.osc.endpoints.some(e=>e.id===endpointId&&e.enabled))return false;
   const key=oscSignalKey(endpointId,msg.address);
   this.record({id:'osc:'+key,kind:'osc',endpointId,name:msg.address,time:msg.time,args:msg.args,types:msg.types});
+  if(this.learned){
+   const endpoint=this.current.osc.endpoints.find(e=>e.id===endpointId);
+   const origin=endpoint?endpoint.name+' · UDP '+endpoint.port:endpointId;
+   const args=msg.args.flatMap((v,i)=>typeof v==='number'||typeof v==='boolean'?[i]:[]);
+   for(const index of args.length?args:[-1]){
+    const output=index<0?'trigger':'value',argument=Math.max(0,index),id=JSON.stringify(['osc',key,index]);
+    const name=msg.address+(msg.args.length>1&&index>=0?' ['+index+']':'');
+    this.learned.set(id,{key:id,source:origin+' · '+name,value:msg.args[argument]??null,node:{id,kind:'osc-input',name,endpointId,address:msg.address,argument,output}});
+   }
+  }
   this.oscValues.set(key,msg.args);return true;
  }
  sensors(connectors:Connector[],subscribe:(id:string,uid:string,channel:number)=>void){
@@ -82,11 +105,16 @@ export class PerformanceSignals {
    for(const channel of new Set([...(module.descriptor?.channels??[]).map(d=>d.id),...Object.keys(module.channels).map(Number)])){
     const id=JSON.stringify([c.id,module.uid,channel]);live.add(id);
     const sample=module.channels[channel];
-    if(this.listeners.size&&(!this.sensorSubscriptions.has(id)||(!sample&&now-this.sensorSubscriptions.get(id)!>2000))){
+    if((this.listeners.size||this.learned)&&(!this.sensorSubscriptions.has(id)||(!sample&&now-this.sensorSubscriptions.get(id)!>2000))){
      subscribe(c.id,module.uid,channel);this.sensorSubscriptions.set(id,now);
     }
     if(!sample||this.rows.get(id)?.time===sample.at)continue;
-    this.record({id,kind:'sensor',name:(module.name??module.uid)+' / '+(module.descriptor?.channels?.find(d=>d.id===channel)?.label??channel),uid:module.uid,channel,time:sample.at,args:[sample.value]});
+    const name=(module.name??module.uid)+' / '+(module.descriptor?.channels?.find(d=>d.id===channel)?.label??channel);
+    if(this.learned&&sample.at>=this.learnStart){
+     const key=JSON.stringify(['hex',module.uid,channel]);
+     this.learned.set(key,{key,source:name+' · '+module.uid+' / '+channel,value:sample.value,node:{id:key,kind:'sensor',uid:module.uid,channel,name}});
+    }
+    this.record({id,kind:'sensor',name,uid:module.uid,channel,time:sample.at,args:[sample.value]});
    }
   }
   for(const id of this.sensorSubscriptions.keys())if(!live.has(id))this.sensorSubscriptions.delete(id);

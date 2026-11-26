@@ -161,8 +161,8 @@ test('graph, canvas state and workspace view survive packed sessions, history an
  const history=new History();history.push(old,current,'Live mapping','user');
  const visual={mode:'stack',selectedNode:'hand',x:32,y:73};
  assert.equal(packFile(old).minAppVersion,'0.3.12');
- assert.equal(packFile({...old,project:{...old.project,performance:emptyPerformance()}}).minAppVersion,'0.6.0-dev.1');
- assert.equal(packFile(old,history).minAppVersion,'0.6.0-dev.1');
+ assert.equal(packFile({...old,project:{...old.project,performance:emptyPerformance()}}).minAppVersion,'0.6.0-pre.1');
+ assert.equal(packFile(old,history).minAppVersion,'0.6.0-pre.1');
  const raw={...packFile(current,history),editor:{workspaceView:'performance',performanceVisual:visual}};
  const text=JSON.stringify(raw),legacy=readDocument(JSON.stringify(packFile(old)));
  assert.equal(legacy.session.project.performance,undefined);
@@ -210,8 +210,8 @@ test('OSC input declarations and value/trigger output wiring are validated',()=>
  validatePerformance(JSON.parse(JSON.stringify(g)));
  for(const fields of [{endpointId:''},{endpointId:123},{address:'pad'},{address:'/contains space'},{argument:-1},{argument:1.2},{output:'midi'}])
   assert.throws(()=>validatePerformance({...g,nodes:g.nodes.map(n=>n.id==='osc'?{...n,...fields}:n)}));
- for(const [id,source] of [['pitch','hit'],['trigger','osc']])
-  assert.throws(()=>validatePerformance({...g,routes:g.routes!.map(r=>r.id===id?{...r,source}:r)}));
+ validatePerformance({...g,routes:g.routes!.map(r=>r.input==='trigger'?{...r,source:'osc'}:r)});
+ assert.throws(()=>validatePerformance({...g,routes:g.routes!.map(r=>r.input==='pitch'?{...r,source:'hit'}:r)}));
  assert.throws(()=>validatePerformance({...g,links:[{...link,source:'hit'}]}));
 });
 

@@ -74,8 +74,7 @@ function Signal({row,t,add}:{row:SignalRow;t:Text;add:AddNode}){
     <Sparkline history={row.history} label={t('Recent samples','最近采样')+' · '+row.name}/>
     <div className="perf-signal-actions">{isOsc?<>{choices.length>1&&<select value={argument} aria-label={t('OSC argument','OSC 参数')+' · '+row.name} onChange={e=>choose(Number(e.target.value))}>
       {choices.map(i=><option key={i} value={i}>arg {i}</option>)}</select>}
-      {choices.length>0&&<button onClick={()=>addOsc('value')}>{t('+ Value','+ 数值')}</button>}
-      <button onClick={()=>addOsc('trigger')}>{t('+ Trigger','+ 触发')}</button></>:
+      <button onClick={()=>addOsc(choices.length?'value':'trigger')}>{t('+ OSC input','+ OSC 输入')}</button></>:
       row.uid!==undefined&&row.channel!==undefined&&<button onClick={()=>add({id:crypto.randomUUID(),kind:'sensor',name:row.name,uid:row.uid,channel:row.channel})}>{t('+ Sensor','+ 传感器')}</button>}</div>
   </li>;
 }

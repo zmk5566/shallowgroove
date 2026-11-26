@@ -1,5 +1,6 @@
 import type {AudioEngine} from './engine';
 import type {Connector} from '../hardware/useHexblocks';
+import {MIN_BPM,MAX_BPM} from '../model/tempo.ts';
 import {hardwareKey,type HardwareMapping} from '../model/hardware.ts';
 import {oscSignalKey,evaluateRemaps,isPerformanceTransform,midiControlKey,isPerformanceUnitSource,mapPerformanceValue,type PerformanceGraph} from '../model/performance.ts';
 import {declaredPatchName} from '../model/patch-name.ts';
@@ -84,9 +85,15 @@ export class PerformanceControls{
   }
   for(const key of this.subscriptions.keys())if(!subscriptions.has(key))this.subscriptions.delete(key);
   this.risingThresholds.length=0;evaluateRemaps(graph,values,this.thresholds,this.risingThresholds);
+  let performanceBpm:number|undefined;
   for(const route of graph.routes??[]){
+   if(route.input==='bpm'&&engine.performanceDsp===true&&Number.isFinite(values[route.source])){
+    performanceBpm=Math.round(Math.max(MIN_BPM,Math.min(MAX_BPM,values[route.source]))*100)/100;
+    values[route.id]=performanceBpm;
+   }
    if(isPerformanceTransform(nodes.get(route.target))&&Number.isFinite(values[route.source]))values[route.id]=values[route.source];
   }
+  if(engine.performanceDsp===true)engine.setPerformanceBpm(performanceBpm);
   const active=new Set<string>();
   for(const link of graph.links){
    const dest=nodes.get(link.target),input=values[link.source];

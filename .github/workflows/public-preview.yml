@@ -86,3 +86,28 @@ jobs:
             release/public/installer/*.exe
           compression-level: 0
           if-no-files-found: error
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: public-*
+          path: packages
+          merge-multiple: true
+      - name: Publish tagged preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="v$version"
+          test "$GITHUB_REF_NAME" = "release/$version"
+          git fetch --no-tags origin "refs/tags/$tag:refs/tags/$tag"
+          test "$(git rev-parse "$tag^{commit}")" = "$GITHUB_SHA"
+          files=("packages/ShallowGroove-$tag-macOS-arm64.zip" "packages/ShallowGroove-$tag-Windows-x64.zip" "packages/installer/ShallowGroove-Setup-$version.exe")
+          for asset in "${files[@]}"; do test -s "$asset"; done
+          gh release create "$tag" "${files[@]}" --verify-tag --prerelease --latest=false --title "ShallowGroove $tag" --notes "Performance view with live MIDI, OSC and HexBlocks routing, input Learn and tempo control."

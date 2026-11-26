@@ -27,3 +27,15 @@ test('two endpoints keep independent readings for the same address through renam
  assert.equal(signals.oscValues.size,0);
  unsubscribe();
 });
+
+test('Learn captures fresh HexBlocks samples and freezes the last value and binding on stop',()=>{
+ const signals=new PerformanceSignals();
+ const now=Date.now(),sample={value:.1,at:now-1000};
+ const connectors=[{id:'sim',label:'Sim',connected:true,transport:{connected:true},modules:[{uid:'C0FFEE01',name:'Demo Knob',channels:{40:sample}}]}];
+ let subscriptions=0;const poll=()=>signals.sensors(connectors,()=>subscriptions++);
+ signals.beginLearn();poll();assert.equal(signals.learnedInputs().length,0);assert.equal(subscriptions,1);
+ sample.at=Date.now();sample.value=.37;poll();
+ sample.at++;sample.value=.63;poll();
+ const [row]=signals.endLearn();assert.equal(row.node.uid,'C0FFEE01');assert.equal(row.node.channel,40);assert.equal(row.value,.63);
+ sample.at++;sample.value=.9;poll();assert.equal(row.value,.63);
+});
